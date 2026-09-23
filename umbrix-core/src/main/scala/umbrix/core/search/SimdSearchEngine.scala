@@ -1,0 +1,419 @@
+package umbrix.core.search
+
+import com.google.re2j.Matcher
+import com.google.re2j.Pattern
+import java.lang.foreign.MemorySegment
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.TimeUnit
+import org.roaringbitmap.longlong.Roaring64NavigableMap
+import scala.jdk.CollectionConverters.*
+import umbrix.core.model.LogLevel
+import umbrix.core.model.QueryAst
+import umbrix.core.parser.QueryParseError
+import umbrix.core.parser.QueryParser
+import umbrix.core.types.{ByteOffset, EpochMicros, LineIndex}
+import umbrix.index.PhysicalLineIndexer
+import umbrix.index.TemporalCheckpointTable
+import umbrix.simd.VectorScanner
+import umbrix.simd.VectorSubstringScanner
+import umbrix.vfs.LogStorageReader
+
+/**
+ * High-performance hardware SIMD search and query execution engine.
+ *
+ * Coordinates parallel chunk-based vector filtering across massive off-heap memory segments:
+ * 1. Literal queries utilize `VectorSubstringScanner` (Ripgrep 2-byte candidate filter) at 15–25 GB/s.
+ * 2. Regular expressions run with guaranteed O(N * M) linear-time execution via RE2J and `OffHeapCharSequence`.
+ * 3. Compound Boolean expressions (AND / OR / NOT) evaluate via compressed RoaringBitmap bitwise operations.
+ * 4. Pinned platform carrier threads (`Thread.ofPlatform()`) saturate multi-channel hardware memory bandwidth.
+ */
+class SimdSearchEngine(
+  val storageReader: LogStorageReader,
+  val lineIndexer: PhysicalLineIndexer,
+  val temporalTableOption: Option[TemporalCheckpointTable] = None,
+  val workerThreadsCount: Int = Runtime.getRuntime.availableProcessors().max(1)
+) extends AutoCloseable {
+
+  private val threadFactory: ThreadFactory =
+    Thread.ofPlatform().name("umbrix-search-worker-", 0).factory()
+
+  private val executorService: ExecutorService =
+    Executors.newFixedThreadPool(workerThreadsCount, threadFactory)
+
+  /** Chunk size for parallel search partitioning (16MB). */
+  private final val partitionChunkSizeBytes: Long = 16L * 1024L * 1024L
+
+  /**
+   * Parses the raw query text and executes it across the log document.
+   *
+   * @param queryText raw search expression
+   * @return `Right(SearchResult)` or `Left(QueryParseError)` on syntax failure
+   */
+  def search(queryText: String): Either[QueryParseError, SearchResult] = {
+    searchProgressive(queryText, _ => ())
+  }
+
+  /**
+   * Parses the raw query text and executes it with progressive partial result notifications.
+   *
+   * @param queryText raw search expression
+   * @param progressConsumer callback receiving incremental SearchResult snapshots as matches are discovered
+   * @return `Right(SearchResult)` with final complete result or `Left(QueryParseError)` on syntax failure
+   */
+  def searchProgressive(
+    queryText: String,
+    progressConsumer: SearchResult => Unit
+  ): Either[QueryParseError, SearchResult] = {
+    QueryParser.parse(queryText).map(ast => executeProgressive(ast, progressConsumer))
+  }
+
+  /**
+   * Evaluates a structured `QueryAst` and returns the matching physical lines synchronously.
+   */
+  def execute(ast: QueryAst): SearchResult = {
+    executeProgressive(ast, _ => ())
+  }
+
+  /**
+   * Evaluates a structured `QueryAst` with progressive notifications on first match and batch updates.
+   */
+  def executeProgressive(
+    ast: QueryAst,
+    progressConsumer: SearchResult => Unit
+  ): SearchResult = {
+    val startNanos: Long = System.nanoTime()
+    val matchingBitmap: Roaring64NavigableMap = evaluateAst(ast, progressConsumer, startNanos)
+    val durationNanos: Long = System.nanoTime() - startNanos
+    val finalResult: SearchResult = SearchResult(
+      matchingBitmap,
+      matchingBitmap.getLongCardinality,
+      durationNanos,
+      isComplete = true
+    )
+    progressConsumer(finalResult)
+    finalResult
+  }
+
+  private def evaluateAst(
+    ast: QueryAst,
+    progressConsumer: SearchResult => Unit,
+    startNanos: Long
+  ): Roaring64NavigableMap = {
+    ast match {
+      case QueryAst.Empty =>
+        new Roaring64NavigableMap()
+
+      case QueryAst.Literal(needleText, isCaseSensitive) =>
+        if (needleText.isEmpty) {
+          new Roaring64NavigableMap()
+        } else if (isCaseSensitive) {
+          searchLiteralParallel(needleText, progressConsumer, startNanos)
+        } else if (isAscii(needleText)) {
+          searchLiteralCaseInsensitiveParallel(needleText, progressConsumer, startNanos)
+        } else {
+          val caseInsensitiveRegex: Pattern = Pattern.compile("(?i)" + Pattern.quote(needleText))
+          searchRegexParallel(caseInsensitiveRegex, progressConsumer, startNanos)
+        }
+
+      case QueryAst.Regex(pattern) =>
+        searchRegexParallel(pattern, progressConsumer, startNanos)
+
+      case QueryAst.LevelFilter(logLevel) =>
+        val levelToken: String = logLevel.toString.toUpperCase
+        val levelRegex: Pattern = Pattern.compile("\\b" + Pattern.quote(levelToken) + "\\b")
+        searchRegexParallel(levelRegex, progressConsumer, startNanos)
+
+      case QueryAst.TimeRange(sinceMicrosOption, untilMicrosOption) =>
+        temporalTableOption match {
+          case Some(temporalTable) =>
+            val total: LineIndex = lineIndexer.totalLines
+            val maxValid: LineIndex = if (total > LineIndex.Zero) total - 1L else LineIndex.Zero
+            val startLine: LineIndex = sinceMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(LineIndex.Zero)
+            val endLine: LineIndex = untilMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(maxValid)
+            val rangeBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+            if (startLine <= endLine && startLine < total) {
+              val endRange: LineIndex = (endLine + 1L).min(total)
+              rangeBitmap.addRange(startLine.value, endRange.value)
+            }
+            rangeBitmap
+          case None =>
+            val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+            allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
+            allLinesBitmap
+        }
+
+      case QueryAst.And(leftAst, rightAst) =>
+        val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos)
+        if (leftBitmap.isEmpty) {
+          leftBitmap
+        } else {
+          val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos)
+          val result: Roaring64NavigableMap = new Roaring64NavigableMap()
+          result.or(leftBitmap)
+          result.and(rightBitmap)
+          result
+        }
+
+      case QueryAst.Or(leftAst, rightAst) =>
+        val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos)
+        val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos)
+        val result: Roaring64NavigableMap = new Roaring64NavigableMap()
+        result.or(leftBitmap)
+        result.or(rightBitmap)
+        result
+
+      case QueryAst.Not(innerAst) =>
+        val innerBitmap: Roaring64NavigableMap = evaluateAst(innerAst, _ => (), startNanos)
+        val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+        allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
+        allLinesBitmap.andNot(innerBitmap)
+        allLinesBitmap
+    }
+  }
+
+  /**
+   * Universal chunk-partitioned parallel search coordinator.
+   *
+   * Dispatches non-blocking carrier platform worker tasks across 16MB file partitions,
+   * coordinates thread-safe match aggregation into a Roaring64NavigableMap, streams
+   * throttled progressive search updates to `progressConsumer`, and evicts memory pages.
+   *
+   * @param overlapBytes trailing overlap bytes to extend chunk slice (e.g. needle.length - 1 for literals)
+   * @param progressConsumer callback receiving incremental partial SearchResult snapshots
+   * @param startNanos search commencement timestamp in nanoseconds
+   * @param chunkScanner function scanning a single off-heap chunk slice and recording matches into local bitmap
+   * @return combined Roaring64NavigableMap containing all matching line numbers
+   */
+  private def dispatchParallelSearch(
+    overlapBytes: Long,
+    progressConsumer: SearchResult => Unit,
+    startNanos: Long
+  )(
+    chunkScanner: (MemorySegment, Long, Long, Long, Roaring64NavigableMap) => Unit
+  ): Roaring64NavigableMap = {
+    val fileSize: Long = storageReader.sizeBytes
+    if (fileSize <= 0L) {
+      new Roaring64NavigableMap()
+    } else {
+      val chunkCount: Int = ((fileSize + partitionChunkSizeBytes - 1L) / partitionChunkSizeBytes).toInt
+      val tasks: java.util.ArrayList[Callable[java.lang.Boolean]] = new java.util.ArrayList[Callable[java.lang.Boolean]](chunkCount)
+
+      val combinedBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+      val stateLock: AnyRef = new AnyRef()
+      val completedChunksCount: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger(0)
+      val firstMatchNotified: java.util.concurrent.atomic.AtomicBoolean = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val lastProgressTimeNanos: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(startNanos)
+      val throttleIntervalNanos: Long = 50_000_000L // 50 ms
+
+      var chunkIndex: Int = 0
+      while (chunkIndex < chunkCount) {
+        val currentChunkIndex: Int = chunkIndex
+        val chunkStartOffset: Long = currentChunkIndex.toLong * partitionChunkSizeBytes
+        val chunkEndOffset: Long = (chunkStartOffset + partitionChunkSizeBytes).min(fileSize)
+        val extendedChunkLength: Long = (chunkEndOffset - chunkStartOffset + overlapBytes).min(fileSize - chunkStartOffset)
+
+        tasks.add(() => {
+          val localResultBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+          try {
+            if (!Thread.currentThread().isInterrupted) {
+              val chunkSlice: MemorySegment = storageReader.readSlice(chunkStartOffset, extendedChunkLength)
+
+              chunkScanner(chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap)
+
+              storageReader.evict(chunkStartOffset, extendedChunkLength)
+            }
+
+            val hasLocalMatches: Boolean = !localResultBitmap.isEmpty
+            val completedSoFar: Int = completedChunksCount.incrementAndGet()
+
+            if ((completedSoFar & 63) == 0) {
+              storageReader.trimWorkingSet()
+            }
+
+            val shouldNotify: Boolean = stateLock.synchronized {
+              if (hasLocalMatches) {
+                combinedBitmap.or(localResultBitmap)
+              }
+              val nowNanos: Long = System.nanoTime()
+              val isFirstMatch: Boolean = hasLocalMatches && firstMatchNotified.compareAndSet(false, true)
+              val isThrottled: Boolean = (nowNanos - lastProgressTimeNanos.get()) >= throttleIntervalNanos
+              val isLastChunk: Boolean = (completedSoFar == chunkCount)
+
+              if ((isFirstMatch || isThrottled) && !isLastChunk) {
+                lastProgressTimeNanos.set(nowNanos)
+                true
+              } else {
+                false
+              }
+            }
+
+            if (shouldNotify) {
+              val snapshotBitmap: Roaring64NavigableMap = stateLock.synchronized {
+                val copy = new Roaring64NavigableMap()
+                copy.or(combinedBitmap)
+                copy
+              }
+              val currentDurationNanos: Long = System.nanoTime() - startNanos
+              progressConsumer(
+                SearchResult(
+                  snapshotBitmap,
+                  snapshotBitmap.getLongCardinality,
+                  currentDurationNanos,
+                  isComplete = false
+                )
+              )
+            }
+          } finally {
+            localResultBitmap.clear()
+          }
+
+          java.lang.Boolean.TRUE
+        })
+        chunkIndex += 1
+      }
+
+      try {
+        val futures = executorService.invokeAll(tasks)
+        tasks.clear()
+        futures.asScala.foreach { future =>
+          try {
+            future.get()
+          } catch {
+            case _: InterruptedException =>
+              Thread.currentThread().interrupt()
+            case executionEx: java.util.concurrent.ExecutionException =>
+              if (executionEx.getCause != null && executionEx.getCause.isInstanceOf[InterruptedException]) {
+                Thread.currentThread().interrupt()
+              }
+            case _: java.util.concurrent.CancellationException =>
+              // Task was cancelled during shutdown or query abort
+          }
+        }
+      } catch {
+        case _: InterruptedException =>
+          tasks.clear()
+          Thread.currentThread().interrupt()
+      } finally {
+        storageReader.trimWorkingSet()
+      }
+      combinedBitmap
+    }
+  }
+
+  /**
+   * Records a match into the partition's local result bitmap if the offset falls before `chunkEndOffset`.
+   */
+  private inline def recordMatch(
+    absoluteMatchOffset: Long,
+    chunkEndOffset: Long,
+    localResultBitmap: Roaring64NavigableMap
+  ): Unit = {
+    if (absoluteMatchOffset < chunkEndOffset) {
+      val lineIndex: LineIndex = lineIndexer.lineIndexForByteOffset(ByteOffset(absoluteMatchOffset))
+      if (lineIndex >= LineIndex.Zero && lineIndex < lineIndexer.totalLines) {
+        localResultBitmap.addLong(lineIndex.value)
+      }
+    }
+  }
+
+  /**
+   * Parallel hardware SIMD literal search using `VectorSubstringScanner`.
+   */
+  private def searchLiteralParallel(
+    needleText: String,
+    progressConsumer: SearchResult => Unit,
+    startNanos: Long
+  ): Roaring64NavigableMap = {
+    val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
+    val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
+
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos) {
+      (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
+        VectorSubstringScanner.scanLiteral(
+          chunkSlice,
+          0L,
+          extendedChunkLength,
+          needleBytes,
+          (relativeMatchOffset: Long) => {
+            recordMatch(chunkStartOffset + relativeMatchOffset, chunkEndOffset, localResultBitmap)
+          }
+        )
+    }
+  }
+
+  /**
+   * Parallel hardware SIMD case-insensitive literal search using `VectorSubstringScanner`.
+   */
+  private def searchLiteralCaseInsensitiveParallel(
+    needleText: String,
+    progressConsumer: SearchResult => Unit,
+    startNanos: Long
+  ): Roaring64NavigableMap = {
+    val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
+    val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
+
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos) {
+      (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
+        VectorSubstringScanner.scanLiteralCaseInsensitive(
+          chunkSlice,
+          0L,
+          extendedChunkLength,
+          needleBytes,
+          (relativeMatchOffset: Long) => {
+            recordMatch(chunkStartOffset + relativeMatchOffset, chunkEndOffset, localResultBitmap)
+          }
+        )
+    }
+  }
+
+  /**
+   * Parallel RE2J linear regular expression search using `OffHeapCharSequence`.
+   */
+  private def searchRegexParallel(
+    pattern: Pattern,
+    progressConsumer: SearchResult => Unit,
+    startNanos: Long
+  ): Roaring64NavigableMap = {
+    dispatchParallelSearch(0L, progressConsumer, startNanos) {
+      (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
+        val offHeapCharSequence: OffHeapCharSequence = new OffHeapCharSequence(chunkSlice, 0L, extendedChunkLength.toInt)
+        val matcher: Matcher = pattern.matcher(offHeapCharSequence)
+        while (matcher.find()) {
+          recordMatch(chunkStartOffset + matcher.start().toLong, chunkEndOffset, localResultBitmap)
+        }
+    }
+  }
+
+  /**
+   * Fast zero-allocation verification that all characters in `text` are within 7-bit ASCII range (0–127).
+   */
+  private def isAscii(text: String): Boolean = {
+    var index: Int = 0
+    val length: Int = text.length
+    var allAscii: Boolean = true
+    while (index < length && allAscii) {
+      if (text.charAt(index) > 127) {
+        allAscii = false
+      }
+      index += 1
+    }
+    allAscii
+  }
+
+  def close(): Unit = {
+    executorService.shutdown()
+    try {
+      if (!executorService.awaitTermination(3, TimeUnit.SECONDS)) {
+        executorService.shutdownNow()
+      }
+    } catch {
+      case _: InterruptedException =>
+        executorService.shutdownNow()
+        Thread.currentThread().interrupt()
+    }
+  }
+}

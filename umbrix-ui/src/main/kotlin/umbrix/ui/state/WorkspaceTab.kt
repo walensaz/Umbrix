@@ -1,0 +1,36 @@
+package umbrix.ui.state
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Job
+import umbrix.core.search.SearchResult
+import umbrix.core.session.LogSession
+
+/**
+ * State container for an active document tab with reactive Compose state properties.
+ */
+class WorkspaceTab(
+    val session: LogSession,
+    val filePath: String,
+    initialTopVisibleLine: Long = 0L,
+    initialSearchQuery: String = "",
+    initialSearchResult: SearchResult? = null,
+    initialIsFilteredView: Boolean = false,
+    initialSelectedLineIndex: Long? = null
+) {
+    var topVisibleLine: Long by mutableStateOf(initialTopVisibleLine)
+    var subLineScrollOffsetPx: Float by mutableStateOf(0f)
+    var searchQuery: String by mutableStateOf(initialSearchQuery)
+    var searchResult: SearchResult? by mutableStateOf(initialSearchResult)
+    var isFilteredView: Boolean by mutableStateOf(initialIsFilteredView)
+    var selectedLineIndex: Long? by mutableStateOf(initialSelectedLineIndex)
+    var searchJob: Job? = null
+
+    var indexingProgress: Double by mutableStateOf(session.indexingProgressPercent())
+    var indexingStatus: String by mutableStateOf(session.indexingStatusText())
+    var isIndexing: Boolean by mutableStateOf(!session.isIndexingComplete())
+    var liveTotalLines: Long by mutableStateOf(session.totalLines())
+
+    val selectionState: umbrix.ui.selection.TextSelectionState = umbrix.ui.selection.TextSelectionState()
+}
