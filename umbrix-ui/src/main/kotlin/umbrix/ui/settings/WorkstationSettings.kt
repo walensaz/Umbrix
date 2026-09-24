@@ -11,5 +11,8 @@ data class WorkstationSettings(
     val customErrorKeywords: String = "",
     val customWarnKeywords: String = "",
     val maxShapedCharsPerLine: Int = 4096,
-    val enableSimdAcceleration: Boolean = true
+    val enableSimdAcceleration: Boolean = true,
+    val isLatencyGapHighlightingEnabled: Boolean = true,
+    val latencyGapThresholdMs: Long = 1000L,
+    val latencyGapSevereThresholdMs: Long = 5000L
 )

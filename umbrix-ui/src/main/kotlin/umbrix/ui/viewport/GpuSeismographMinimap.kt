@@ -70,6 +70,9 @@ fun GpuSeismographMinimap(
     searchResult: SearchResult?,
     session: LogSession? = null,
     widthDp: Dp = 48.dp,
+    focusStartLine: Long = 0L,
+    focusEndLine: Long = 0L,
+    isFocusActive: Boolean = false,
     onScrollToLine: (Long) -> Unit
 ) {
     var isHovered by remember { mutableStateOf(false) }
@@ -236,6 +239,41 @@ fun GpuSeismographMinimap(
                     drawRect(
                         color = Color(0x884FC3F7),
                         topLeft = Offset(0f, viewTopY + viewHeight - 1.5f),
+                        size = Size(canvasWidth, 1.5f)
+                    )
+                }
+
+                // Render Temporal Focus Mode dimming overlay
+                if (isFocusActive && totalLines > 0L) {
+                    val focusTopRatio = (focusStartLine.toDouble() / totalLines.toDouble()).coerceIn(0.0, 1.0)
+                    val focusBottomRatio = ((focusEndLine + 1L).toDouble() / totalLines.toDouble()).coerceIn(0.0, 1.0)
+                    val focusTopY = (focusTopRatio * canvasHeight).toFloat()
+                    val focusBottomY = (focusBottomRatio * canvasHeight).toFloat()
+
+                    if (focusTopY > 0f) {
+                        drawRect(
+                            color = UmbrixColors.temporalFocusDimOverlay,
+                            topLeft = Offset.Zero,
+                            size = Size(canvasWidth, focusTopY)
+                        )
+                    }
+                    if (focusBottomY < canvasHeight) {
+                        drawRect(
+                            color = UmbrixColors.temporalFocusDimOverlay,
+                            topLeft = Offset(0f, focusBottomY),
+                            size = Size(canvasWidth, canvasHeight - focusBottomY)
+                        )
+                    }
+
+                    // Border indicators at focus boundaries
+                    drawRect(
+                        color = Color(0xFF00E5FF),
+                        topLeft = Offset(0f, focusTopY),
+                        size = Size(canvasWidth, 1.5f)
+                    )
+                    drawRect(
+                        color = Color(0xFF00E5FF),
+                        topLeft = Offset(0f, focusBottomY - 1.5f),
                         size = Size(canvasWidth, 1.5f)
                     )
                 }

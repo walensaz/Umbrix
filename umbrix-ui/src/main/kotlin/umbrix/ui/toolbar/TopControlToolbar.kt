@@ -39,6 +39,8 @@ fun TopControlToolbar(
     onDecreaseFontSize: () -> Unit,
     isSearchBarOpen: Boolean,
     onToggleSearchBar: () -> Unit,
+    isTimeScrubberOpen: Boolean = false,
+    onToggleTimeScrubber: () -> Unit = {},
     onOpenSettings: () -> Unit = {}
 ) {
     Row(
@@ -90,6 +92,16 @@ fun TopControlToolbar(
             enabled = session != null
         ) {
             Text("🔍 Search (Ctrl+F)")
+        }
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // Time Range Scrubber Button
+        OutlinedButton(
+            onClick = onToggleTimeScrubber,
+            enabled = session != null
+        ) {
+            Text("🕐 Time (Ctrl+T)")
         }
 
         Spacer(modifier = Modifier.width(12.dp))

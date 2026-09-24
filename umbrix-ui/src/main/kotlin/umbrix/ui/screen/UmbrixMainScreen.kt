@@ -41,12 +41,14 @@ import umbrix.core.search.SearchResult
 import umbrix.core.session.LogSession
 import umbrix.ui.components.ForensicErrorBanner
 import umbrix.ui.dialog.GoToLineDialog
+import umbrix.ui.dialog.GoToTimestampDialog
 import umbrix.ui.dialog.SettingsDialog
 import umbrix.ui.error.WorkstationErrorHandler
 import umbrix.ui.search.SearchBar
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.state.WorkstationKeyDispatcher
+import umbrix.ui.temporal.TemporalRangeScrubber
 import umbrix.ui.theme.UmbrixColors
 import umbrix.ui.toolbar.BottomStatusBar
 import umbrix.ui.toolbar.TabBar
@@ -426,6 +428,13 @@ fun UmbrixMainScreen(
                             true
                         } else false
                     }
+                    isCtrlOrCmd && keyEvent.key == Key.T -> {
+                        val tab = currentTab
+                        if (tab != null && activeSession != null) {
+                            tab.isTimeScrubberOpen = !tab.isTimeScrubberOpen
+                            true
+                        } else false
+                    }
                     isCtrlOrCmd && keyEvent.key == Key.C -> {
                         val tab = currentTab
                         if (tab != null) {
@@ -482,6 +491,9 @@ fun UmbrixMainScreen(
                             isSearchBarVisible = false
                             focusManager.clearFocus()
                             triggerSearch("")
+                            true
+                        } else if (currentTab?.isTimeScrubberOpen == true) {
+                            currentTab.isTimeScrubberOpen = false
                             true
                         } else if (currentTab?.selectionState?.hasSelection() == true) {
                             currentTab.selectionState.clearSelection()
@@ -577,6 +589,12 @@ fun UmbrixMainScreen(
                 isSearchBarVisible = !isSearchBarVisible
                 if (isSearchBarVisible) searchFocusTrigger++
             },
+            isTimeScrubberOpen = currentTab?.isTimeScrubberOpen ?: false,
+            onToggleTimeScrubber = {
+                currentTab?.let { tab ->
+                    tab.isTimeScrubberOpen = !tab.isTimeScrubberOpen
+                }
+            },
             onOpenSettings = { onSetSettingsDialogVisible(true) }
         )
 
@@ -648,6 +666,33 @@ fun UmbrixMainScreen(
             )
         }
 
+        // --- Dual-Handle Time Range Scrubber (Ctrl+T) ---
+        if (currentTab != null && currentTab.isTimeScrubberOpen && activeSession != null) {
+            Divider(Orientation.Horizontal)
+            TemporalRangeScrubber(
+                tab = currentTab,
+                session = activeSession,
+                onTrimView = { startLine, endLine, startMicros, endMicros ->
+                    currentTab.temporalFocusStartLine = startLine
+                    currentTab.temporalFocusEndLine = endLine
+                    currentTab.temporalFocusStartMicros = startMicros
+                    currentTab.temporalFocusEndMicros = endMicros
+                    currentTab.isTemporalFocusActive = true
+                    currentTab.topVisibleLine = 0L
+                    currentTab.selectedLineIndex = 0L
+                    val trimmedCount = maxOf(0L, endLine - startLine + 1L)
+                    statusMessageText = "Trimmed view to ${formatNumberWithCommas(trimmedCount)} lines."
+                },
+                onClearTrim = {
+                    currentTab.isTemporalFocusActive = false
+                    statusMessageText = "Cleared temporal focus. Showing all ${formatNumberWithCommas(activeSession.totalLines())} lines."
+                },
+                onClose = {
+                    currentTab.isTimeScrubberOpen = false
+                }
+            )
+        }
+
         Divider(Orientation.Horizontal)
 
         // --- Center Log Viewport Canvas ---
@@ -670,15 +715,28 @@ fun UmbrixMainScreen(
         )
     }
 
-    // --- Go to Line Modal Dialog (Ctrl+G / Cmd+G) ---
+    // --- Go to Line or Timestamp Modal Dialog (Ctrl+G / Cmd+G) ---
     if (isGoToLineDialogVisible && activeSession != null) {
-        GoToLineDialog(
-            totalLines = activeSession.totalLines(),
+        GoToTimestampDialog(
+            session = activeSession,
             currentLine = currentTab?.selectedLineIndex ?: currentTab?.topVisibleLine ?: 0L,
             onGoToLine = { targetLine ->
                 currentTab?.let { tab ->
-                    tab.topVisibleLine = targetLine
-                    tab.selectedLineIndex = targetLine
+                    if (tab.isTemporalFocusActive) {
+                        val clampedLine = targetLine.coerceIn(0L, maxOf(0L, activeSession.totalLines() - 1L))
+                        if (clampedLine in tab.temporalFocusStartLine..tab.temporalFocusEndLine) {
+                            tab.topVisibleLine = clampedLine - tab.temporalFocusStartLine
+                            tab.selectedLineIndex = clampedLine
+                        } else {
+                            // If target line is outside the active focus slice, clear focus to reveal it
+                            tab.isTemporalFocusActive = false
+                            tab.topVisibleLine = clampedLine
+                            tab.selectedLineIndex = clampedLine
+                        }
+                    } else {
+                        tab.topVisibleLine = targetLine
+                        tab.selectedLineIndex = targetLine
+                    }
                 }
                 isGoToLineDialogVisible = false
             },

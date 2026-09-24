@@ -32,5 +32,13 @@ class WorkspaceTab(
     var isIndexing: Boolean by mutableStateOf(!session.isIndexingComplete())
     var liveTotalLines: Long by mutableStateOf(session.totalLines())
 
+    // --- Temporal Navigation & Focus Mode ---
+    var isTimeScrubberOpen: Boolean by mutableStateOf(false)
+    var isTemporalFocusActive: Boolean by mutableStateOf(false)
+    var temporalFocusStartMicros: Long by mutableStateOf(0L)
+    var temporalFocusEndMicros: Long by mutableStateOf(0L)
+    var temporalFocusStartLine: Long by mutableStateOf(0L)
+    var temporalFocusEndLine: Long by mutableStateOf(0L)
+
     val selectionState: umbrix.ui.selection.TextSelectionState = umbrix.ui.selection.TextSelectionState()
 }

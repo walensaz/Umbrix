@@ -69,6 +69,9 @@ fun SettingsDialog(
     var customWarnKeywords by remember { mutableStateOf(initialSettings.customWarnKeywords) }
     var maxShapedCharsPerLine by remember { mutableStateOf(initialSettings.maxShapedCharsPerLine) }
     var enableSimdAcceleration by remember { mutableStateOf(initialSettings.enableSimdAcceleration) }
+    var isLatencyGapHighlightingEnabled by remember { mutableStateOf(initialSettings.isLatencyGapHighlightingEnabled) }
+    var latencyGapThresholdMs by remember { mutableStateOf(initialSettings.latencyGapThresholdMs) }
+    var latencyGapSevereThresholdMs by remember { mutableStateOf(initialSettings.latencyGapSevereThresholdMs) }
 
     fun buildCurrent(): WorkstationSettings = WorkstationSettings(
         isMinimapEnabled = isMinimapEnabled,
@@ -78,7 +81,10 @@ fun SettingsDialog(
         customErrorKeywords = customErrorKeywords,
         customWarnKeywords = customWarnKeywords,
         maxShapedCharsPerLine = maxShapedCharsPerLine,
-        enableSimdAcceleration = enableSimdAcceleration
+        enableSimdAcceleration = enableSimdAcceleration,
+        isLatencyGapHighlightingEnabled = isLatencyGapHighlightingEnabled,
+        latencyGapThresholdMs = latencyGapThresholdMs,
+        latencyGapSevereThresholdMs = latencyGapSevereThresholdMs
     )
 
     Dialog(
@@ -328,6 +334,52 @@ fun SettingsDialog(
                                             color = UmbrixColors.textMuted
                                         )
                                     }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    Text(
+                                        text = "Temporal Navigation & Latency Gaps",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = UmbrixColors.textPrimary
+                                    )
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = isLatencyGapHighlightingEnabled,
+                                            onCheckedChange = { isLatencyGapHighlightingEnabled = it }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Highlight Latency Gaps in Viewport Gutter (Amber/Red dots)")
+                                    }
+
+                                    if (isLatencyGapHighlightingEnabled) {
+                                        Column(modifier = Modifier.padding(start = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text("Warning Gap Threshold (Amber):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                for (ms in listOf(500L, 1000L, 2000L, 5000L)) {
+                                                    OutlinedButton(
+                                                        onClick = { latencyGapThresholdMs = ms },
+                                                        enabled = latencyGapThresholdMs != ms
+                                                    ) {
+                                                        Text("${ms}ms")
+                                                    }
+                                                }
+                                            }
+
+                                            Text("Severe Gap Threshold (Red Outage):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                for (ms in listOf(3000L, 5000L, 10000L)) {
+                                                    OutlinedButton(
+                                                        onClick = { latencyGapSevereThresholdMs = ms },
+                                                        enabled = latencyGapSevereThresholdMs != ms
+                                                    ) {
+                                                        Text("${ms}ms")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -352,15 +404,15 @@ fun SettingsDialog(
                                     )
 
                                     PluginCard(
-                                        name = "JVM Garbage Collection Analyzer",
-                                        status = "Planned",
-                                        description = "Inspects GC pause distribution, allocation rates, and stop-the-world spikes."
+                                        name = "Latency Gap & Stall Detector",
+                                        status = "Active (Built-in)",
+                                        description = "Detects unlogged execution freezes and thread starvation gaps exceeding 1,000ms."
                                     )
 
                                     PluginCard(
-                                        name = "Latency Gap & Stall Detector",
+                                        name = "JVM Garbage Collection Analyzer",
                                         status = "Planned",
-                                        description = "Detects unlogged execution freezes and thread starvation gaps exceeding 1,000ms."
+                                        description = "Inspects GC pause distribution, allocation rates, and stop-the-world spikes."
                                     )
                                 }
                             }

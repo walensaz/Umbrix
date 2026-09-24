@@ -11,6 +11,7 @@ import umbrix.core.search.SearchResult
 import umbrix.core.search.SimdSearchEngine
 import umbrix.core.slicing.LogSlicer
 import umbrix.core.slicing.SliceResult
+import umbrix.core.temporal.{LatencyGapResult, LatencyGapScanner}
 import umbrix.core.types.{ByteOffset, EpochMicros, LineIndex}
 import umbrix.core.view.FilteredLineView
 import umbrix.index.{PhysicalLineIndexerImpl, TemporalCheckpointTable, TwoLevelSparseIndex}
@@ -46,7 +47,8 @@ class LogSession(
   private val bytesScannedSupplier: () => Long = () => 0L,
   val minimapFuture: CompletableFuture[MinimapDensityTable] = CompletableFuture.completedFuture(null),
   private val minimapProgressSupplier: () => Double = () => 1.0,
-  val languageProfile: LogLanguageProfile = JavaJvmProfile
+  val languageProfile: LogLanguageProfile = JavaJvmProfile,
+  val latencyGapFuture: CompletableFuture[LatencyGapResult] = CompletableFuture.completedFuture(LatencyGapResult.empty)
 ) extends AutoCloseable {
 
   /**
@@ -272,10 +274,88 @@ class LogSession(
   }
 
   /**
+   * Earliest recorded wall-clock timestamp in epoch microseconds, or None if temporal index is unavailable.
+   */
+  def firstTimestamp: Option[Long] = {
+    temporalIndex.firstTimestamp.map(_.value)
+  }
+
+  /**
+   * Latest recorded wall-clock timestamp in epoch microseconds, or None if temporal index is unavailable.
+   */
+  def lastTimestamp: Option[Long] = {
+    temporalIndex.lastTimestamp.map(_.value)
+  }
+
+  /**
+   * True if temporal checkpoints are fully populated with at least two samples to enable range navigation.
+   */
+  def isTemporalDataAvailable: Boolean = {
+    isTemporalIndexComplete && temporalIndex.checkpointCount >= 2
+  }
+
+  /**
+   * Indicates whether document timestamps are strictly chronological (monotonic).
+   * Returns true for standard in-order logs (99%), or false if out-of-order blocks were detected and auto-sorted.
+   */
+  def isLogChronologicallyOrdered: Boolean = {
+    temporalIndex.isMonotonic
+  }
+
+  /**
    * Seeks the nearest line index for a wall-clock timestamp in epoch microseconds in O(log N) time.
    */
   def seekNearestLine(epochMicros: EpochMicros): LineIndex = {
     temporalIndex.seekNearestLine(epochMicros)
+  }
+
+  /**
+   * Resolves the bounding line indices [startLine, endLine] for a given wall-clock time range in microseconds.
+   *
+   * @param startMicros start timestamp in epoch microseconds
+   * @param endMicros end timestamp in epoch microseconds
+   * @return primitive long array of length 2: [startLine, endLine]
+   */
+  def seekLineRangeBounds(startMicros: Long, endMicros: Long): Array[Long] = {
+    val (startLine, endLine) = temporalIndex.seekLineRange(EpochMicros(startMicros), EpochMicros(endMicros))
+    Array(startLine.value, endLine.value)
+  }
+
+  /**
+   * Calculates estimated line count within the specified temporal range.
+   */
+  def lineCountInTimeRange(startMicros: Long, endMicros: Long): Long = {
+    val range = seekLineRangeBounds(startMicros, endMicros)
+    math.max(0L, range(1) - range(0) + 1L)
+  }
+
+  /**
+   * Active LatencyGapResult instance if ready, or an empty result during background analysis.
+   */
+  def latencyGapResult: LatencyGapResult = {
+    if (latencyGapFuture.isDone) {
+      try {
+        latencyGapFuture.get()
+      } catch {
+        case _: Throwable => LatencyGapResult.empty
+      }
+    } else {
+      LatencyGapResult.empty
+    }
+  }
+
+  /**
+   * O(1) check determining if a line marks the beginning of an abnormal latency gap.
+   */
+  def hasLatencyGapAt(lineIndex: Long): Boolean = {
+    latencyGapResult.hasGapAt(LineIndex(lineIndex))
+  }
+
+  /**
+   * Retrieves latency gap duration in microseconds for a line, or 0L if no gap.
+   */
+  def latencyGapDurationAt(lineIndex: Long): Long = {
+    latencyGapResult.gapDurationAt(LineIndex(lineIndex))
   }
 
   /**
@@ -471,6 +551,14 @@ class LogSession(
     }
 
     try {
+      if (latencyGapFuture != null && !latencyGapFuture.isDone) {
+        latencyGapFuture.cancel(true)
+      }
+    } catch {
+      case _: Throwable => ()
+    }
+
+    try {
       if (minimapFuture != null && !minimapFuture.isDone) {
         minimapFuture.cancel(true)
       }
@@ -548,6 +636,7 @@ object LogSession {
       val temporalFuturePromise = new CompletableFuture[TemporalCheckpointTable]()
       val classifierFuturePromise = new CompletableFuture[EventBoundaryClassifier]()
       val minimapFuturePromise = new CompletableFuture[MinimapDensityTable]()
+      val latencyGapFuturePromise = new CompletableFuture[LatencyGapResult]()
 
       def triggerTier2(finalIndexer: PhysicalLineIndexerImpl): Unit = {
         val tFuture = TemporalCheckpointTable.buildAsync(
@@ -557,8 +646,17 @@ object LogSession {
         tFuture.whenComplete((res, err) => {
           if (err != null) {
             temporalFuturePromise.completeExceptionally(err)
+            latencyGapFuturePromise.complete(LatencyGapResult.empty)
           } else {
             temporalFuturePromise.complete(res)
+            val gFuture = LatencyGapScanner.buildAsync(tFuture, LatencyGapScanner.DefaultThresholdMicros)
+            gFuture.whenComplete((gRes, gErr) => {
+              if (gErr != null) {
+                latencyGapFuturePromise.complete(LatencyGapResult.empty)
+              } else {
+                latencyGapFuturePromise.complete(gRes)
+              }
+            })
           }
         })
 
@@ -621,6 +719,7 @@ object LogSession {
               temporalFuturePromise.completeExceptionally(err)
               classifierFuturePromise.completeExceptionally(err)
               minimapFuturePromise.completeExceptionally(err)
+              latencyGapFuturePromise.complete(LatencyGapResult.empty)
             }
           })
           (createdIndexer, pFuture)
@@ -653,7 +752,8 @@ object LogSession {
         () => bytesScanned,
         minimapFuturePromise,
         () => minimapProgress,
-        resolvedProfile
+        resolvedProfile,
+        latencyGapFuturePromise
       )
     } catch {
       case t: Throwable =>

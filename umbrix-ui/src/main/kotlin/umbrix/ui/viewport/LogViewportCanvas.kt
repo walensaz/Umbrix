@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -95,15 +98,19 @@ fun LogViewportCanvas(
         val session = tab?.session
         val searchResult = tab?.searchResult
         val isFilteredMode = tab?.isFilteredView == true && searchResult != null
+        val isTemporalMode = tab?.isTemporalFocusActive == true && !isFilteredMode
 
         val filteredView: FilteredLineView? = if (isFilteredMode && session != null) {
             session.createFilteredView(searchResult!!.matchingLines())
         } else null
 
-        val totalLinesCount = if (isFilteredMode && filteredView != null) {
-            filteredView.totalFilteredLines()
-        } else {
-            session?.totalLines() ?: 0L
+        val temporalStartLine = if (isTemporalMode) tab!!.temporalFocusStartLine else 0L
+        val temporalEndLine = if (isTemporalMode) tab!!.temporalFocusEndLine else (session?.totalLines() ?: 0L) - 1L
+
+        val totalLinesCount = when {
+            isFilteredMode && filteredView != null -> filteredView.totalFilteredLines()
+            isTemporalMode -> max(0L, temporalEndLine - temporalStartLine + 1L)
+            else -> session?.totalLines() ?: 0L
         }
 
         val rowHeightDp = (editorFontSizeSp + 8.5f).dp
@@ -276,21 +283,18 @@ fun LogViewportCanvas(
                         for (rowIndex in 0 until renderRowCount) {
                             val virtualRowIndex = tab.topVisibleLine + rowIndex
                             val isRowValid = virtualRowIndex < totalLinesCount
-                            val lineNumberText = if (isRowValid) {
-                                if (isFilteredMode && filteredView != null) {
-                                    (filteredView.physicalLineForVirtualIndex(virtualRowIndex) + 1L).toString()
-                                } else {
-                                    (virtualRowIndex + 1L).toString()
-                                }
-                            } else ""
 
                             val physicalLine = if (isRowValid) {
-                                if (isFilteredMode && filteredView != null) {
-                                    filteredView.physicalLineForVirtualIndex(virtualRowIndex)
-                                } else {
-                                    virtualRowIndex
+                                when {
+                                    isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRowIndex)
+                                    isTemporalMode -> temporalStartLine + virtualRowIndex
+                                    else -> virtualRowIndex
                                 }
                             } else -1L
+
+                            val lineNumberText = if (isRowValid && physicalLine >= 0L) {
+                                (physicalLine + 1L).toString()
+                            } else ""
 
                             val isMatch = searchResult != null && physicalLine >= 0 && searchResult.matchingLines().contains(physicalLine)
                             val isActiveMatch = isMatch && virtualRowIndex == tab.topVisibleLine
@@ -301,6 +305,7 @@ fun LogViewportCanvas(
                                 isActiveMatch -> UmbrixColors.gutterLineActiveMatch
                                 isMatch -> UmbrixColors.gutterLineMatch
                                 isFilteredMode -> UmbrixColors.gutterLineFiltered
+                                isTemporalMode -> UmbrixColors.gutterLineActiveMatch
                                 else -> UmbrixColors.gutterLineNormal
                             }
 
@@ -310,6 +315,12 @@ fun LogViewportCanvas(
                                 isMatch -> FontWeight.SemiBold
                                 else -> FontWeight.Normal
                             }
+
+                            val hasLatencyGap = isRowValid && physicalLine >= 0L &&
+                                SettingsManager.currentSettings.isLatencyGapHighlightingEnabled &&
+                                session.hasLatencyGapAt(physicalLine)
+                            val gapDuration = if (hasLatencyGap) session.latencyGapDurationAt(physicalLine) else 0L
+                            val isSevereGap = gapDuration >= (SettingsManager.currentSettings.latencyGapSevereThresholdMs * 1000L)
 
                             Box(
                                 modifier = Modifier
@@ -323,16 +334,27 @@ fun LogViewportCanvas(
                                         if (isRowValid && physicalLine >= 0L) {
                                             tab.selectedLineIndex = physicalLine
                                         }
-                                    },
-                                contentAlignment = Alignment.CenterEnd
+                                    }
                             ) {
+                                if (hasLatencyGap) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .padding(start = 2.dp)
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(if (isSevereGap) UmbrixColors.latencyGapRed else UmbrixColors.latencyGapAmber)
+                                    )
+                                }
+
                                 Text(
                                     text = lineNumberText,
                                     fontFamily = EditorTypography.editorFontFamily,
                                     fontSize = (editorFontSizeSp - 1.5f).coerceAtLeast(10f).sp,
                                     color = lineNumberColor,
                                     fontWeight = lineNumberWeight,
-                                    textAlign = TextAlign.End
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.align(Alignment.CenterEnd)
                                 )
                             }
                         }
@@ -461,28 +483,28 @@ fun LogViewportCanvas(
                             ) {
                                 for (rowIndex in 0 until renderRowCount) {
                                     val virtualRowIndex = tab.topVisibleLine + rowIndex
-                                    val (rawLineText, isMatch) = if (virtualRowIndex < totalLinesCount) {
+                                    val physicalLine = if (virtualRowIndex < totalLinesCount) {
+                                        when {
+                                            isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRowIndex)
+                                            isTemporalMode -> temporalStartLine + virtualRowIndex
+                                            else -> virtualRowIndex
+                                        }
+                                    } else -1L
+
+                                    val (rawLineText, isMatch) = if (virtualRowIndex < totalLinesCount && physicalLine >= 0L) {
                                         try {
                                             if (isFilteredMode && filteredView != null) {
                                                 val fetched = filteredView.getVirtualLineText(virtualRowIndex, ViewportState.MAX_SHAPED_CHARS)
                                                 Pair(fetched, true)
                                             } else {
-                                                val fetched = session.getLineText(virtualRowIndex, ViewportState.MAX_SHAPED_CHARS)
-                                                val match = searchResult?.matchingLines()?.contains(virtualRowIndex) == true
+                                                val fetched = session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
+                                                val match = searchResult?.matchingLines()?.contains(physicalLine) == true
                                                 Pair(fetched, match)
                                             }
                                         } catch (e: Exception) {
                                             Pair("", false)
                                         }
                                     } else Pair("", false)
-
-                                    val physicalLine = if (virtualRowIndex < totalLinesCount) {
-                                        if (isFilteredMode && filteredView != null) {
-                                            filteredView.physicalLineForVirtualIndex(virtualRowIndex)
-                                        } else {
-                                            virtualRowIndex
-                                        }
-                                    } else -1L
 
                                     val isActiveMatch = isMatch && virtualRowIndex == tab.topVisibleLine
                                     val isSelected = tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
@@ -566,18 +588,29 @@ fun LogViewportCanvas(
                 // --- GPU Seismograph Minimap ---
                 if (SettingsManager.currentSettings.isMinimapEnabled) {
                     val minimapTable = session.minimapTableOrNull()
+                    val minimapTotalLines = if (isTemporalMode) session.totalLines() else totalLinesCount
+                    val effectiveTopLine = if (isTemporalMode) temporalStartLine + tab.topVisibleLine else tab.topVisibleLine
+
                     GpuSeismographMinimap(
                         table = minimapTable,
                         session = session,
-                        totalLines = totalLinesCount,
+                        totalLines = minimapTotalLines,
                         visibleRowCount = visibleRowCount,
-                        topLineIndex = tab.topVisibleLine,
+                        topLineIndex = effectiveTopLine,
                         searchResult = searchResult,
                         widthDp = SettingsManager.currentSettings.minimapWidthDp.dp,
+                        focusStartLine = temporalStartLine,
+                        focusEndLine = temporalEndLine,
+                        isFocusActive = isTemporalMode,
                         onScrollToLine = { newTop ->
                             tab.subLineScrollOffsetPx = 0f
-                            val maxTop = max(0L, totalLinesCount - visibleRowCount)
-                            tab.topVisibleLine = newTop.coerceIn(0L, maxTop)
+                            if (isTemporalMode) {
+                                val relTop = (newTop - temporalStartLine).coerceIn(0L, max(0L, totalLinesCount - visibleRowCount))
+                                tab.topVisibleLine = relTop
+                            } else {
+                                val maxTop = max(0L, totalLinesCount - visibleRowCount)
+                                tab.topVisibleLine = newTop.coerceIn(0L, maxTop)
+                            }
                         }
                     )
                 }

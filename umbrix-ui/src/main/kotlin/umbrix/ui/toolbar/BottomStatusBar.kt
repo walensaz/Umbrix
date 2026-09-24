@@ -29,7 +29,9 @@ import umbrix.core.session.LogSession
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.theme.UmbrixColors
 import umbrix.ui.util.formatByteSize
+import umbrix.ui.util.formatEpochMicros
 import umbrix.ui.util.formatNumberWithCommas
+import kotlin.math.max
 
 /**
  * Bottom workstation status bar displaying telemetry, viewport metrics, and coordinate positions.
@@ -119,10 +121,22 @@ fun BottomStatusBar(
             "Line ${formatNumberWithCommas(topVisibleLine + 1L)}"
         }
 
-        val modeLabel = if (activeTab?.isFilteredView == true) {
-            "Mode: Filtered View (${formatNumberWithCommas(activeTab.searchResult?.totalMatches() ?: 0L)} matches)"
-        } else {
-            "Mode: Compact Stream (60-120 FPS)"
+        val modeLabel = when {
+            activeTab?.isFilteredView == true -> {
+                "Mode: Filtered View (${formatNumberWithCommas(activeTab.searchResult?.totalMatches() ?: 0L)} matches)"
+            }
+            activeTab?.isTemporalFocusActive == true -> {
+                val spanMicros = activeTab.temporalFocusEndMicros - activeTab.temporalFocusStartMicros
+                val showDate = spanMicros >= 86_400_000_000L ||
+                    (activeTab.temporalFocusStartMicros / 86_400_000_000L != activeTab.temporalFocusEndMicros / 86_400_000_000L)
+                val startStr = formatEpochMicros(activeTab.temporalFocusStartMicros, includeDate = showDate)
+                val endStr = formatEpochMicros(activeTab.temporalFocusEndMicros, includeDate = showDate)
+                val count = max(0L, activeTab.temporalFocusEndLine - activeTab.temporalFocusStartLine + 1L)
+                "Mode: Temporal Focus ($startStr – $endStr, ${formatNumberWithCommas(count)} lines)"
+            }
+            else -> {
+                "Mode: Compact Stream (60-120 FPS)"
+            }
         }
 
         val memoryLabel = "JVM Heap: ${formatByteSize(jvmHeapUsedBytes)} | 0 bytes log data on GC heap"

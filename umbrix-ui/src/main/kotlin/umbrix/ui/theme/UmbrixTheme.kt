@@ -81,6 +81,25 @@ object UmbrixColors {
     val errorThreadColor = Color(0xFFB0BEC5)        // Thread identifier
     val errorMessageColor = Color(0xFFECEFF1)       // Error message text
     val errorFilePathColor = Color(0xFF90A4AE)      // Diagnostic file path
+
+    // --- Temporal Navigation & Range Scrubber ---
+    val scrubberTrack = Color(0xFF232529)           // Scrubber track background
+    val scrubberFillStart = Color(0xFF2196F3)       // Selected range gradient start
+    val scrubberFillEnd = Color(0xFF00E5FF)         // Selected range gradient end
+    val scrubberHandle = Color(0xFF64B5F6)          // Handle knob fill
+    val scrubberHandleBorder = Color(0xFF90CAF9)    // Handle knob border
+    val scrubberTimestampLabel = Color(0xFFBCBEC4)  // Timestamp edge labels
+    val scrubberTickGap = Color(0xFFFFB74D)         // Latency gap tick on scrubber
+    val scrubberTickSevereGap = Color(0xFFFF5252)   // Severe latency gap tick on scrubber
+
+    // --- Latency Gap Gutter Indicators ---
+    val latencyGapAmber = Color(0xFFFFB74D)         // Moderate gap (>1s)
+    val latencyGapRed = Color(0xFFFF5252)           // Severe gap (>5s)
+
+    // --- Temporal Focus Mode ---
+    val temporalFocusBadgeText = Color(0xFF4FC3F7)  // Focus mode badge text
+    val temporalFocusBadgeBackground = Color(0xFF1A3A5C) // Focus mode badge background
+    val temporalFocusDimOverlay = Color(0x99000000) // Minimap dim overlay outside focus
 }
 
 /**
