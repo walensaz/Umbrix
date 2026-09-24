@@ -19,7 +19,10 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import umbrix.core.session.LogSession
 import umbrix.ui.components.Badge
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.settings.SettingsManager
+import umbrix.ui.theme.FontSpec
+import umbrix.ui.theme.UmbrixFonts
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatByteSize
 import umbrix.ui.util.formatNumberWithCommas
 
@@ -34,19 +37,26 @@ fun TopControlToolbar(
     onLoadPathClicked: () -> Unit,
     isIndexing: Boolean,
     session: LogSession?,
-    fontSizeSp: Float,
-    onIncreaseFontSize: () -> Unit,
-    onDecreaseFontSize: () -> Unit,
     isSearchBarOpen: Boolean,
     onToggleSearchBar: () -> Unit,
     isTimeScrubberOpen: Boolean = false,
     onToggleTimeScrubber: () -> Unit = {},
-    onOpenSettings: () -> Unit = {}
+    onOpenSettings: () -> Unit = {},
+    onZoomChange: (Float) -> Unit = { delta ->
+        val current = SettingsManager.currentSettings
+        val updatedPt = (current.editorFontSizePt + delta).coerceIn(
+            FontSpec.MIN_FONT_SIZE,
+            FontSpec.MAX_FONT_SIZE
+        )
+        SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+    }
 ) {
+    val fonts = UmbrixFonts.current
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(UmbrixColors.surfacePanel)
+            .background(UmbrixTheme.colors.surfacePanel)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -109,29 +119,29 @@ fun TopControlToolbar(
         if (session != null) {
             Badge(
                 label = "${formatNumberWithCommas(session.totalLines())} lines",
-                textColor = UmbrixColors.badgeLinesText,
-                backgroundColor = UmbrixColors.badgeLinesBackground
+                textColor = UmbrixTheme.colors.badgeLinesText,
+                backgroundColor = UmbrixTheme.colors.badgeLinesBackground
             )
             Spacer(modifier = Modifier.width(8.dp))
 
             Badge(
                 label = formatByteSize(session.fileSizeBytes()),
-                textColor = UmbrixColors.badgeSizeText,
-                backgroundColor = UmbrixColors.badgeSizeBackground
+                textColor = UmbrixTheme.colors.badgeSizeText,
+                backgroundColor = UmbrixTheme.colors.badgeSizeBackground
             )
             Spacer(modifier = Modifier.width(8.dp))
 
             Badge(
                 label = "${session.simdVectorWidth() * 8}-bit SIMD",
-                textColor = UmbrixColors.badgeSimdText,
-                backgroundColor = UmbrixColors.badgeSimdBackground
+                textColor = UmbrixTheme.colors.badgeSimdText,
+                backgroundColor = UmbrixTheme.colors.badgeSimdBackground
             )
             Spacer(modifier = Modifier.width(8.dp))
 
             Badge(
                 label = "${session.indexingDurationMs()} ms index",
-                textColor = UmbrixColors.badgeDurationText,
-                backgroundColor = UmbrixColors.badgeDurationBackground
+                textColor = UmbrixTheme.colors.badgeDurationText,
+                backgroundColor = UmbrixTheme.colors.badgeDurationBackground
             )
         }
 
@@ -140,21 +150,21 @@ fun TopControlToolbar(
         // Zoom / Font size controls
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(
-                onClick = onDecreaseFontSize,
-                enabled = fontSizeSp > 10f
+                onClick = { onZoomChange(-1.0f) },
+                enabled = fonts.editorFontSizePt > FontSpec.MIN_FONT_SIZE
             ) {
                 Text("-", fontWeight = FontWeight.Bold)
             }
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = "${fontSizeSp.toInt()} pt",
+                text = "${fonts.editorFontSizePt.toInt()} pt",
                 fontSize = 12.sp,
-                color = UmbrixColors.textSecondary
+                color = UmbrixTheme.colors.textSecondary
             )
             Spacer(modifier = Modifier.width(6.dp))
             OutlinedButton(
-                onClick = onIncreaseFontSize,
-                enabled = fontSizeSp < 26f
+                onClick = { onZoomChange(1.0f) },
+                enabled = fonts.editorFontSizePt < FontSpec.MAX_FONT_SIZE
             ) {
                 Text("+", fontWeight = FontWeight.Bold)
             }

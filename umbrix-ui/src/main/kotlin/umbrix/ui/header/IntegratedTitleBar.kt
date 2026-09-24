@@ -36,14 +36,18 @@ import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.window.WindowState
 import org.jetbrains.jewel.ui.component.Text
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.menu.HamburgerMenuContent
+import umbrix.ui.menu.MenuAction
+import umbrix.ui.menu.UmbrixDropdownMenu
+import umbrix.ui.settings.WorkstationSettings
+import umbrix.ui.theme.UmbrixTheme
 
 /**
  * Integrated dark carbon window title bar modeled after the IntelliJ "New UI" header.
  *
  * Features:
  * - Gradient placeholder logo icon
- * - Hamburger menu button (☰) triggering the IntelliJ Settings modal
+ * - Hamburger menu button (☰) hosting the cascading [UmbrixDropdownMenu] (Phase 4)
  * - Centered active document title
  * - Draggable window surface with double-click maximize/restore toggle
  * - Clean minimize, maximize/restore, and close buttons
@@ -53,7 +57,8 @@ import umbrix.ui.theme.UmbrixColors
 fun WindowScope.IntegratedTitleBar(
     windowState: WindowState,
     activeDocumentTitle: String?,
-    onOpenSettings: () -> Unit,
+    settings: WorkstationSettings,
+    onMenuAction: (MenuAction) -> Unit,
     onMinimize: () -> Unit,
     onToggleMaximize: () -> Unit,
     onClose: () -> Unit
@@ -62,7 +67,7 @@ fun WindowScope.IntegratedTitleBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(34.dp)
-            .background(UmbrixColors.surfacePanel)
+            .background(UmbrixTheme.colors.surfacePanel)
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -83,7 +88,7 @@ fun WindowScope.IntegratedTitleBar(
                     .size(20.dp)
                     .background(
                         brush = Brush.linearGradient(
-                            listOf(UmbrixColors.progressGradientStart, UmbrixColors.progressGradientEnd)
+                            listOf(UmbrixTheme.colors.progressGradientStart, UmbrixTheme.colors.progressGradientEnd)
                         ),
                         shape = RoundedCornerShape(4.dp)
                     ),
@@ -101,11 +106,12 @@ fun WindowScope.IntegratedTitleBar(
 
             // --- Hamburger Menu Button (☰) ---
             var isHamburgerHovered by remember { mutableStateOf(false) }
+            var isMenuOpen by remember { mutableStateOf(false) }
             Box(
                 modifier = Modifier
                     .size(26.dp)
                     .background(
-                        color = if (isHamburgerHovered) UmbrixColors.surfaceElevated else Color.Transparent,
+                        color = if (isHamburgerHovered || isMenuOpen) UmbrixTheme.colors.surfaceElevated else Color.Transparent,
                         shape = RoundedCornerShape(4.dp)
                     )
                     .onPointerEvent(PointerEventType.Enter) { isHamburgerHovered = true }
@@ -113,16 +119,30 @@ fun WindowScope.IntegratedTitleBar(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                        onClick = onOpenSettings
+                        onClick = { isMenuOpen = !isMenuOpen }
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "☰",
-                    color = if (isHamburgerHovered) UmbrixColors.textPrimary else UmbrixColors.textSecondary,
+                    color = if (isHamburgerHovered || isMenuOpen) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
+
+                // Placed inside the button so the popup anchors to the button's window bounds
+                UmbrixDropdownMenu(
+                    expanded = isMenuOpen,
+                    onDismissRequest = { isMenuOpen = false }
+                ) {
+                    HamburgerMenuContent(
+                        settings = settings,
+                        onAction = { menuAction ->
+                            isMenuOpen = false
+                            onMenuAction(menuAction)
+                        }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.width(10.dp))
@@ -136,7 +156,7 @@ fun WindowScope.IntegratedTitleBar(
 
             Text(
                 text = displayTitle,
-                color = UmbrixColors.textSecondary,
+                color = UmbrixTheme.colors.textSecondary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -147,20 +167,20 @@ fun WindowScope.IntegratedTitleBar(
             // --- Window Controls (Minimize, Maximize, Close) ---
             WindowControlButton(
                 symbol = "—",
-                hoverColor = UmbrixColors.surfaceElevated,
+                hoverColor = UmbrixTheme.colors.windowControlHover,
                 onClick = onMinimize
             )
 
             val isMaximized = windowState.placement == WindowPlacement.Maximized
             WindowControlButton(
                 symbol = if (isMaximized) "❐" else "□",
-                hoverColor = UmbrixColors.surfaceElevated,
+                hoverColor = UmbrixTheme.colors.windowControlHover,
                 onClick = onToggleMaximize
             )
 
             WindowControlButton(
                 symbol = "✕",
-                hoverColor = Color(0xFFE81123),
+                hoverColor = UmbrixTheme.colors.windowControlHoverClose,
                 hoverTextColor = Color.White,
                 onClick = onClose
             )
@@ -173,10 +193,11 @@ fun WindowScope.IntegratedTitleBar(
 private fun WindowControlButton(
     symbol: String,
     hoverColor: Color,
-    hoverTextColor: Color = UmbrixColors.textPrimary,
+    hoverTextColor: Color? = null,
     onClick: () -> Unit
 ) {
     var isHovered by remember { mutableStateOf(false) }
+    val effectiveHoverTextColor = hoverTextColor ?: UmbrixTheme.colors.textPrimary
 
     Box(
         modifier = Modifier
@@ -194,7 +215,7 @@ private fun WindowControlButton(
     ) {
         Text(
             text = symbol,
-            color = if (isHovered) hoverTextColor else UmbrixColors.textMuted,
+            color = if (isHovered) effectiveHoverTextColor else UmbrixTheme.colors.textMuted,
             fontSize = 12.sp,
             fontWeight = FontWeight.Normal
         )

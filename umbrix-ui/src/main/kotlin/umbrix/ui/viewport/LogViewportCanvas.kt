@@ -50,6 +50,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isCtrlPressed as isPointerCtrlPressed
+import androidx.compose.ui.input.pointer.isMetaPressed as isPointerMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isPointerShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -76,7 +78,9 @@ import umbrix.ui.selection.TextPosition
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.theme.EditorTypography
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.FontSpec
+import umbrix.ui.theme.UmbrixFonts
+import umbrix.ui.theme.UmbrixTheme
 import kotlin.math.max
 
 /**
@@ -87,12 +91,20 @@ import kotlin.math.max
 @Composable
 fun LogViewportCanvas(
     tab: WorkspaceTab?,
-    editorFontSizeSp: Float,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
+    val colors = UmbrixTheme.colors
+    val fonts = UmbrixFonts.current
+
+    val editorFontFamily = remember(fonts.editorFontFamily) {
+        EditorTypography.resolvedEditorFontFamily(fonts.editorFontFamily)
+    }
+    val fontFeatureSettings = remember(fonts.enableLigatures) {
+        EditorTypography.resolveFontFeatureSettings(fonts.enableLigatures)
+    }
 
     BoxWithConstraints(modifier = modifier) {
         val session = tab?.session
@@ -113,19 +125,20 @@ fun LogViewportCanvas(
             else -> session?.totalLines() ?: 0L
         }
 
-        val rowHeightDp = (editorFontSizeSp + 8.5f).dp
-        val rowHeightPx = (editorFontSizeSp + 8.5f) * density.density
+        val rowHeightDp = (fonts.editorFontSizePt * fonts.lineHeightMultiplier + 4.0f).dp
+        val rowHeightPx = (fonts.editorFontSizePt * fonts.lineHeightMultiplier + 4.0f) * density.density
         val visibleRowCount = ((maxHeight - 12.dp) / rowHeightDp).toInt().coerceAtLeast(1)
         val renderRowCount = visibleRowCount + 2
 
         val textMeasurer = rememberTextMeasurer()
-        val measuredCharWidthPx = remember(editorFontSizeSp, density) {
+        val measuredCharWidthPx = remember(fonts.editorFontSizePt, fonts.editorFontFamily, fonts.editorFontWeight, density) {
             val sample = "01234567890123456789012345678901234567890123456789" // 50 chars
             val layout = textMeasurer.measure(
                 text = sample,
                 style = TextStyle(
-                    fontFamily = EditorTypography.editorFontFamily,
-                    fontSize = editorFontSizeSp.sp
+                    fontFamily = editorFontFamily,
+                    fontSize = fonts.editorFontSizePt.sp,
+                    fontWeight = fonts.resolvedEditorWeight
                 )
             )
             (layout.size.width.toFloat() / sample.length.toFloat()).coerceAtLeast(1f)
@@ -139,14 +152,14 @@ fun LogViewportCanvas(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = "No log file open",
-                        color = UmbrixColors.textEmptyStateTitle,
+                        color = colors.textEmptyStateTitle,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Click 'Open Log File...' or enter a path above to inspect 25GB–100GB+ logs.",
-                        color = UmbrixColors.textEmptyStateSubtitle,
+                        color = colors.textEmptyStateSubtitle,
                         fontSize = 13.sp
                     )
                 }
@@ -155,7 +168,7 @@ fun LogViewportCanvas(
             val horizontalScrollState = rememberScrollState()
             val viewportFocusRequester = remember { FocusRequester() }
             val textLayoutResults = remember { mutableMapOf<Int, TextLayoutResult>() }
-            var dynamicCharWidthPx by remember(editorFontSizeSp) { mutableStateOf(measuredCharWidthPx) }
+            var dynamicCharWidthPx by remember(measuredCharWidthPx) { mutableStateOf(measuredCharWidthPx) }
 
             Row(
                 modifier = Modifier
@@ -175,8 +188,18 @@ fun LogViewportCanvas(
                         val scrollDeltaY = change?.scrollDelta?.y ?: 0f
                         val scrollDeltaX = change?.scrollDelta?.x ?: 0f
                         val isShift = event.keyboardModifiers.isPointerShiftPressed
+                        val isCtrlOrCmd = event.keyboardModifiers.isPointerCtrlPressed || event.keyboardModifiers.isPointerMetaPressed
 
-                        if (isShift && scrollDeltaY != 0f) {
+                        if (isCtrlOrCmd && scrollDeltaY != 0f) {
+                            change?.consume()
+                            val delta = if (scrollDeltaY < 0f) 0.5f else -0.5f
+                            val current = SettingsManager.currentSettings
+                            val updatedPt = (current.editorFontSizePt + delta).coerceIn(
+                                FontSpec.MIN_FONT_SIZE,
+                                FontSpec.MAX_FONT_SIZE
+                            )
+                            SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+                        } else if (isShift && scrollDeltaY != 0f) {
                             change?.consume()
                             coroutineScope.launch {
                                 horizontalScrollState.scrollBy(scrollDeltaY * 60f)
@@ -257,15 +280,21 @@ fun LogViewportCanvas(
                     }
             ) {
                 // --- Gutter: Line Numbers ---
+                val showLineNumbers = SettingsManager.currentSettings.showLineNumbers
                 val maxLineDigits = totalLinesCount.toString().length.coerceAtLeast(4)
-                val gutterWidth = (maxLineDigits * (editorFontSizeSp * 0.72f).toInt() + 24).dp
+                // Hidden numbers collapse the gutter to a slim lane that still hosts latency-gap dots
+                val gutterWidth = if (showLineNumbers) {
+                    (maxLineDigits * (fonts.editorFontSizePt * 0.72f).toInt() + 24).dp
+                } else {
+                    16.dp
+                }
 
                 Column(
                     modifier = Modifier
                         .width(gutterWidth)
                         .fillMaxHeight()
                         .clipToBounds()
-                        .background(UmbrixColors.surfaceGutter)
+                        .background(colors.surfaceGutter)
                         .padding(end = 8.dp)
                 ) {
                     Box(
@@ -292,7 +321,7 @@ fun LogViewportCanvas(
                                 }
                             } else -1L
 
-                            val lineNumberText = if (isRowValid && physicalLine >= 0L) {
+                            val lineNumberText = if (showLineNumbers && isRowValid && physicalLine >= 0L) {
                                 (physicalLine + 1L).toString()
                             } else ""
 
@@ -301,12 +330,12 @@ fun LogViewportCanvas(
                             val isSelected = tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
 
                             val lineNumberColor = when {
-                                isSelected -> UmbrixColors.gutterLineSelected
-                                isActiveMatch -> UmbrixColors.gutterLineActiveMatch
-                                isMatch -> UmbrixColors.gutterLineMatch
-                                isFilteredMode -> UmbrixColors.gutterLineFiltered
-                                isTemporalMode -> UmbrixColors.gutterLineActiveMatch
-                                else -> UmbrixColors.gutterLineNormal
+                                isSelected -> colors.gutterLineSelected
+                                isActiveMatch -> colors.gutterLineActiveMatch
+                                isMatch -> colors.gutterLineMatch
+                                isFilteredMode -> colors.gutterLineFiltered
+                                isTemporalMode -> colors.gutterLineActiveMatch
+                                else -> colors.gutterLineNormal
                             }
 
                             val lineNumberWeight = when {
@@ -343,14 +372,14 @@ fun LogViewportCanvas(
                                             .padding(start = 2.dp)
                                             .size(5.dp)
                                             .clip(CircleShape)
-                                            .background(if (isSevereGap) UmbrixColors.latencyGapRed else UmbrixColors.latencyGapAmber)
+                                            .background(if (isSevereGap) colors.latencyGapRed else colors.latencyGapAmber)
                                     )
                                 }
 
                                 Text(
                                     text = lineNumberText,
-                                    fontFamily = EditorTypography.editorFontFamily,
-                                    fontSize = (editorFontSizeSp - 1.5f).coerceAtLeast(10f).sp,
+                                    fontFamily = editorFontFamily,
+                                    fontSize = (fonts.editorFontSizePt - 1.5f).coerceAtLeast(10f).sp,
                                     color = lineNumberColor,
                                     fontWeight = lineNumberWeight,
                                     textAlign = TextAlign.End,
@@ -368,7 +397,7 @@ fun LogViewportCanvas(
                     modifier = Modifier
                         .width(1.dp)
                         .fillMaxHeight()
-                        .background(UmbrixColors.gutterBorder)
+                        .background(colors.gutterBorder)
                 )
 
                 // --- Content: Monospaced Log Text Rows ---
@@ -434,7 +463,7 @@ fun LogViewportCanvas(
                                 modifier = Modifier
                                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
                                     .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)))
-                                    .pointerInput(tab, renderRowCount, editorFontSizeSp) {
+                                    .pointerInput(tab, renderRowCount, fonts.editorFontSizePt, fonts.lineHeightMultiplier) {
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false)
                                             val paddingStartPx = with(density) { 8.dp.toPx() }
@@ -510,19 +539,19 @@ fun LogViewportCanvas(
                                     val isSelected = tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
 
                                     val rowBackgroundColor = when {
-                                        isSelected -> UmbrixColors.rowSelected
-                                        isActiveMatch -> UmbrixColors.rowActiveMatch
-                                        isMatch && isFilteredMode -> UmbrixColors.rowFilteredMatch
-                                        isMatch -> UmbrixColors.rowMatch
+                                        isSelected -> colors.rowSelected
+                                        isActiveMatch -> colors.rowActiveMatch
+                                        isMatch && isFilteredMode -> colors.rowFilteredMatch
+                                        isMatch -> colors.rowMatch
                                         else -> Color.Transparent
                                     }
 
-                                    val baseAnnotatedLine = remember(rawLineText, searchNeedles, isMatch, isActiveMatch) {
-                                        buildHighlightedLine(rawLineText, searchNeedles, isMatch, isActiveMatch)
+                                    val baseAnnotatedLine = remember(rawLineText, searchNeedles, isMatch, isActiveMatch, colors) {
+                                        buildHighlightedLine(rawLineText, searchNeedles, isMatch, isActiveMatch, colors)
                                     }
                                     val selectedRange = tab.selectionState.getSelectedRangeForLine(virtualRowIndex, rawLineText.length)
                                     val annotatedLine = if (selectedRange != null) {
-                                        applySelectionHighlight(baseAnnotatedLine, selectedRange)
+                                        applySelectionHighlight(baseAnnotatedLine, selectedRange, colors.selectionBackground)
                                     } else {
                                         baseAnnotatedLine
                                     }
@@ -545,9 +574,11 @@ fun LogViewportCanvas(
                                     ) {
                                         Text(
                                             text = annotatedLine,
-                                            fontFamily = EditorTypography.editorFontFamily,
-                                            fontSize = editorFontSizeSp.sp,
-                                            color = UmbrixColors.textEditor,
+                                            fontFamily = editorFontFamily,
+                                            fontSize = fonts.editorFontSizePt.sp,
+                                            fontWeight = fonts.resolvedEditorWeight,
+                                            style = TextStyle(fontFeatureSettings = fontFeatureSettings),
+                                            color = colors.textEditor,
                                             maxLines = 1,
                                             softWrap = false,
                                             onTextLayout = { layoutResult ->
@@ -573,14 +604,14 @@ fun LogViewportCanvas(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(12.dp)
-                            .background(UmbrixColors.surfaceGutter),
+                            .background(colors.surfaceGutter),
                         style = ScrollbarStyle(
                             minimalHeight = 32.dp,
                             thickness = 8.dp,
                             shape = RoundedCornerShape(4.dp),
                             hoverDurationMillis = 300,
-                            unhoverColor = UmbrixColors.scrollbarHorizontalUnhovered,
-                            hoverColor = UmbrixColors.scrollbarHorizontalHovered
+                            unhoverColor = colors.scrollbarHorizontalUnhovered,
+                            hoverColor = colors.scrollbarHorizontalHovered
                         )
                     )
                 }

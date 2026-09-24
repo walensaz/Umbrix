@@ -14,11 +14,15 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import umbrix.ui.error.WorkstationErrorHandler
 import umbrix.ui.header.IntegratedTitleBar
+import umbrix.ui.menu.MenuAction
 import umbrix.ui.screen.UmbrixMainScreen
+import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkstationKeyDispatcher
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.ThemeRegistry
 import umbrix.ui.theme.UmbrixTheme
 import java.awt.datatransfer.DataFlavor
 import java.awt.dnd.DnDConstants
@@ -58,6 +62,9 @@ object DesktopAppLauncher {
                     var droppedFilePath by remember { mutableStateOf<String?>(null) }
                     var activeDocTitle by remember { mutableStateOf<String?>(null) }
                     var isSettingsOpen by remember { mutableStateOf(false) }
+                    // Title bar (producer) and main screen (consumer) are siblings; a channel decouples them
+                    val menuActionChannel = remember { Channel<MenuAction>(Channel.UNLIMITED) }
+                    val menuActionFlow = remember(menuActionChannel) { menuActionChannel.receiveAsFlow() }
 
                     DisposableEffect(window) {
                         val dropTarget = object : DropTarget() {
@@ -84,16 +91,23 @@ object DesktopAppLauncher {
                         }
                     }
 
-                    UmbrixTheme {
+                    val currentTheme = ThemeRegistry.findByName(SettingsManager.currentSettings.themeName)
+                        ?: ThemeRegistry.defaultTheme()
+
+                    UmbrixTheme(
+                        theme = currentTheme,
+                        fonts = SettingsManager.currentSettings.toFontSpec()
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .border(1.dp, UmbrixColors.surfaceElevated)
+                                .border(1.dp, UmbrixTheme.colors.border)
                         ) {
                             IntegratedTitleBar(
                                 windowState = windowState,
                                 activeDocumentTitle = activeDocTitle,
-                                onOpenSettings = { isSettingsOpen = true },
+                                settings = SettingsManager.currentSettings,
+                                onMenuAction = { menuAction -> menuActionChannel.trySend(menuAction) },
                                 onMinimize = { windowState.isMinimized = true },
                                 onToggleMaximize = {
                                     windowState.placement = if (windowState.placement == WindowPlacement.Maximized) {
@@ -114,7 +128,12 @@ object DesktopAppLauncher {
                                 onClearDroppedFilePath = { droppedFilePath = null },
                                 onActiveDocTitleChange = { activeDocTitle = it },
                                 isSettingsDialogVisible = isSettingsOpen,
-                                onSetSettingsDialogVisible = { isSettingsOpen = it }
+                                onSetSettingsDialogVisible = { isSettingsOpen = it },
+                                menuActions = menuActionFlow,
+                                onExitRequest = {
+                                    WorkstationErrorHandler.isShuttingDown = true
+                                    exitApplication()
+                                }
                             )
                         }
                     }

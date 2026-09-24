@@ -22,7 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -48,7 +48,7 @@ fun Custom64BitScrollbar(
         modifier = Modifier
             .width(14.dp)
             .fillMaxHeight()
-            .background(UmbrixColors.surfaceScrollbarTrack)
+            .background(UmbrixTheme.colors.surfaceScrollbarTrack)
     ) {
         val totalTrackHeightPx = constraints.maxHeight.toFloat()
         if (totalTrackHeightPx <= 0f) return@BoxWithConstraints
@@ -113,9 +113,9 @@ fun Custom64BitScrollbar(
                 }
         ) {
             val thumbColor = when {
-                isDragging -> UmbrixColors.scrollbarThumbDragging
-                isHovered -> UmbrixColors.scrollbarThumbHovered
-                else -> UmbrixColors.scrollbarThumbResting
+                isDragging -> UmbrixTheme.colors.scrollbarThumbDragging
+                isHovered -> UmbrixTheme.colors.scrollbarThumbHovered
+                else -> UmbrixTheme.colors.scrollbarThumbResting
             }
 
             Box(

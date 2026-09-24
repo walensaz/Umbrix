@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -30,6 +31,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.ui.Orientation
@@ -44,15 +47,17 @@ import umbrix.ui.dialog.GoToLineDialog
 import umbrix.ui.dialog.GoToTimestampDialog
 import umbrix.ui.dialog.SettingsDialog
 import umbrix.ui.error.WorkstationErrorHandler
+import umbrix.ui.menu.MenuAction
+import umbrix.ui.menu.MenuSettingsReducer
 import umbrix.ui.search.SearchBar
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.state.WorkstationKeyDispatcher
 import umbrix.ui.temporal.TemporalRangeScrubber
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.FontSpec
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.toolbar.BottomStatusBar
 import umbrix.ui.toolbar.TabBar
-import umbrix.ui.toolbar.TopControlToolbar
 import umbrix.ui.util.formatByteSize
 import umbrix.ui.util.formatNumberWithCommas
 import umbrix.ui.util.showNativeOpenFileDialog
@@ -64,7 +69,7 @@ import java.awt.datatransfer.StringSelection
 import java.io.File
 
 /**
- * Main workstation layout coordinating multi-document tabs, top controls,
+ * Main workstation layout coordinating multi-document tabs, hamburger actions,
  * hardware SIMD search bar, forensic error reporting, and center log viewport.
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -75,7 +80,9 @@ fun UmbrixMainScreen(
     onClearDroppedFilePath: () -> Unit = {},
     onActiveDocTitleChange: (String?) -> Unit = {},
     isSettingsDialogVisible: Boolean = false,
-    onSetSettingsDialogVisible: (Boolean) -> Unit = {}
+    onSetSettingsDialogVisible: (Boolean) -> Unit = {},
+    menuActions: Flow<MenuAction> = emptyFlow(),
+    onExitRequest: () -> Unit = {}
 ) {
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -95,10 +102,8 @@ fun UmbrixMainScreen(
     }
     var activeTabIndex by remember { mutableStateOf(0) }
 
-    var currentFilePathInput by remember { mutableStateOf(initialFilePath ?: "") }
     var isIndexingActive by remember { mutableStateOf(false) }
     var statusMessageText by remember { mutableStateOf("Ready — No log file loaded.") }
-    var editorFontSizeSp by remember { mutableStateOf(13.5f) }
 
     var isSearchBarVisible by remember { mutableStateOf(false) }
     var searchFocusTrigger by remember { mutableStateOf(0) }
@@ -146,7 +151,7 @@ fun UmbrixMainScreen(
                     }
                 }
 
-                currentFilePathInput = targetFile.absolutePath
+                SettingsManager.recordRecentFile(targetFile.absolutePath)
                 val formattedSize = formatByteSize(newSession.fileSizeBytes())
                 val initialLines = formatNumberWithCommas(newSession.totalLines())
                 statusMessageText = "Opened ${targetFile.name} ($formattedSize, $initialLines initial lines preview) in ${newSession.indexingDurationMs()} ms"
@@ -408,6 +413,78 @@ fun UmbrixMainScreen(
         }
     }
 
+    fun openFileViaNativeDialog() {
+        val chosenPath = showNativeOpenFileDialog()
+        if (chosenPath != null) {
+            loadLogFile(chosenPath, asNewTab = true)
+        }
+    }
+
+    fun generateDiagnosticReport() {
+        val tab = currentTab
+        val context = if (tab != null) {
+            ForensicReportContext.fromSession(tab.filePath, tab.session.fileSizeBytes(), tab.session.totalLines(), tab.topVisibleLine)
+        } else {
+            ForensicReportContext.empty()
+        }
+        // Reuses the forensic pipeline (disk persistence + banner) with a non-fatal marker throwable
+        val report = WorkstationErrorHandler.reportException(OperatorDiagnosticSnapshot(), context)
+        statusMessageText = "Diagnostic report ${report.reportId()} generated — ${report.reportFilePathString()}"
+    }
+
+    /** Central dispatcher for every action emitted by the title bar hamburger menu. */
+    fun handleMenuAction(action: MenuAction) {
+        try {
+            val updatedSettings = MenuSettingsReducer.reduce(action, SettingsManager.currentSettings)
+            if (updatedSettings != null) {
+                SettingsManager.updateSettings(updatedSettings)
+            }
+            when (action) {
+                is MenuAction.OpenFile -> openFileViaNativeDialog()
+                is MenuAction.OpenRecentFile -> loadLogFile(action.path, asNewTab = true)
+                is MenuAction.ClearRecentFiles -> statusMessageText = "Cleared recent files."
+                is MenuAction.Find -> {
+                    isSearchBarVisible = true
+                    searchFocusTrigger++
+                }
+                is MenuAction.GoToLineTimestamp -> {
+                    if (activeSession != null) {
+                        isGoToLineDialogVisible = true
+                    } else {
+                        statusMessageText = "Open a log file to use Go To Line / Timestamp."
+                    }
+                }
+                is MenuAction.TemporalRange -> {
+                    val tab = currentTab
+                    if (tab != null) {
+                        tab.isTimeScrubberOpen = !tab.isTimeScrubberOpen
+                    } else {
+                        statusMessageText = "Open a log file to use the temporal range scrubber."
+                    }
+                }
+                is MenuAction.SetViewportMode -> statusMessageText = "Viewport layout: ${action.mode.displayLabel}"
+                is MenuAction.ToggleView -> Unit
+                is MenuAction.SetTheme -> Unit
+                is MenuAction.OpenSettings -> onSetSettingsDialogVisible(true)
+                is MenuAction.DiagnosticReport -> generateDiagnosticReport()
+                is MenuAction.About -> {
+                    statusMessageText = "Umbrix — Industrial Log Workstation · JDK ${Runtime.version()} · " +
+                        "${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
+                }
+                is MenuAction.Exit -> onExitRequest()
+            }
+        } catch (e: Throwable) {
+            if (ForensicErrorReportGenerator.isFatal(e)) throw e
+            WorkstationErrorHandler.reportException(e)
+        }
+    }
+
+    // rememberUpdatedState keeps the long-lived collector bound to the latest tab/session closures
+    val latestMenuActionHandler by rememberUpdatedState(::handleMenuAction)
+    LaunchedEffect(menuActions) {
+        menuActions.collect { menuAction -> latestMenuActionHandler(menuAction) }
+    }
+
     DisposableEffect(isSearchBarVisible, isGoToLineDialogVisible, isSettingsDialogVisible, currentTab, activeTabIndex) {
         WorkstationKeyDispatcher.onGlobalKeyEvent = { keyEvent ->
             if (keyEvent.type == KeyEventType.KeyDown) {
@@ -415,6 +492,27 @@ fun UmbrixMainScreen(
                 when {
                     isCtrlOrCmd && keyEvent.key == Key.Comma -> {
                         onSetSettingsDialogVisible(true)
+                        true
+                    }
+                    isCtrlOrCmd && (keyEvent.key == Key.Plus || keyEvent.key == Key.Equals || keyEvent.key == Key.NumPadAdd) -> {
+                        val current = SettingsManager.currentSettings
+                        val updatedPt = (current.editorFontSizePt + 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                        SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+                        true
+                    }
+                    isCtrlOrCmd && (keyEvent.key == Key.Minus || keyEvent.key == Key.NumPadSubtract) -> {
+                        val current = SettingsManager.currentSettings
+                        val updatedPt = (current.editorFontSizePt - 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                        SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+                        true
+                    }
+                    isCtrlOrCmd && (keyEvent.key == Key.Zero || keyEvent.key == Key.NumPad0) -> {
+                        val current = SettingsManager.currentSettings
+                        SettingsManager.updateSettings(current.copy(editorFontSizePt = FontSpec.DEFAULT_FONT_SIZE))
+                        true
+                    }
+                    isCtrlOrCmd && keyEvent.key == Key.O -> {
+                        openFileViaNativeDialog()
                         true
                     }
                     isCtrlOrCmd && keyEvent.key == Key.F -> {
@@ -534,7 +632,7 @@ fun UmbrixMainScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(UmbrixColors.surface)
+                .background(UmbrixTheme.colors.surface)
                 .onPreviewKeyEvent { keyEvent ->
                 WorkstationKeyDispatcher.handleKeyEvent(keyEvent)
             }
@@ -563,40 +661,6 @@ fun UmbrixMainScreen(
         )
 
         Divider(Orientation.Horizontal)
-
-        // --- Top Control Toolbar ---
-        TopControlToolbar(
-            filePathText = currentFilePathInput,
-            onFilePathTextChange = { currentFilePathInput = it },
-            onOpenFileClicked = {
-                val chosenPath = showNativeOpenFileDialog()
-                if (chosenPath != null) {
-                    loadLogFile(chosenPath, asNewTab = true)
-                }
-            },
-            onLoadPathClicked = {
-                if (currentFilePathInput.isNotBlank()) {
-                    loadLogFile(currentFilePathInput, asNewTab = true)
-                }
-            },
-            isIndexing = isIndexingActive,
-            session = activeSession,
-            fontSizeSp = editorFontSizeSp,
-            onIncreaseFontSize = { editorFontSizeSp = (editorFontSizeSp + 1f).coerceIn(10f, 26f) },
-            onDecreaseFontSize = { editorFontSizeSp = (editorFontSizeSp - 1f).coerceIn(10f, 26f) },
-            isSearchBarOpen = isSearchBarVisible,
-            onToggleSearchBar = {
-                isSearchBarVisible = !isSearchBarVisible
-                if (isSearchBarVisible) searchFocusTrigger++
-            },
-            isTimeScrubberOpen = currentTab?.isTimeScrubberOpen ?: false,
-            onToggleTimeScrubber = {
-                currentTab?.let { tab ->
-                    tab.isTimeScrubberOpen = !tab.isTimeScrubberOpen
-                }
-            },
-            onOpenSettings = { onSetSettingsDialogVisible(true) }
-        )
 
         // --- ReDoS-Immune Search Bar (Ctrl+F) ---
         if (isSearchBarVisible) {
@@ -698,7 +762,6 @@ fun UmbrixMainScreen(
         // --- Center Log Viewport Canvas ---
         LogViewportCanvas(
             tab = currentTab,
-            editorFontSizeSp = editorFontSizeSp,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
@@ -760,3 +823,10 @@ fun UmbrixMainScreen(
     }
 }
 }
+
+/**
+ * Non-fatal marker throwable used to capture an operator-requested forensic snapshot (menu
+ * "Diagnostic Report") through the standard [ForensicErrorReportGenerator] pipeline.
+ */
+private class OperatorDiagnosticSnapshot :
+    RuntimeException("Operator-requested diagnostic snapshot (not an error)")

@@ -43,7 +43,7 @@ import org.jetbrains.jewel.ui.component.Text
 import umbrix.core.session.LogSession
 import umbrix.ui.components.Badge
 import umbrix.ui.state.WorkspaceTab
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatDurationMicros
 import umbrix.ui.util.formatEpochMicros
 import umbrix.ui.util.formatNumberWithCommas
@@ -68,6 +68,7 @@ fun TemporalRangeScrubber(
     onClearTrim: () -> Unit,
     onClose: () -> Unit
 ) {
+    val colors = UmbrixTheme.colors
     val firstTimestamp = session.firstTimestamp()
     val lastTimestamp = session.lastTimestamp()
 
@@ -76,14 +77,14 @@ fun TemporalRangeScrubber(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(UmbrixColors.surfacePanel)
+                .background(colors.surfacePanel)
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "🕐 Temporal index is analyzing log timestamps in background...",
                 fontSize = 11.5.sp,
-                color = UmbrixColors.progressText
+                color = colors.progressText
             )
             Spacer(modifier = Modifier.weight(1f))
             OutlinedButton(onClick = onClose) {
@@ -123,7 +124,7 @@ fun TemporalRangeScrubber(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(UmbrixColors.surfacePanel)
+            .background(colors.surfacePanel)
             .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         // --- Header Row: Selected time range info, Trim View, Clear, Close ---
@@ -135,7 +136,7 @@ fun TemporalRangeScrubber(
                 text = "🕐 Time Range Scrubber",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                color = UmbrixColors.textPrimary
+                color = colors.textPrimary
             )
 
             Spacer(modifier = Modifier.width(10.dp))
@@ -147,7 +148,7 @@ fun TemporalRangeScrubber(
             Text(
                 text = "Selected: $startStr  →  $endStr",
                 fontSize = 11.5.sp,
-                color = UmbrixColors.textEditor,
+                color = colors.textEditor,
                 fontWeight = FontWeight.SemiBold
             )
 
@@ -155,16 +156,16 @@ fun TemporalRangeScrubber(
 
             Badge(
                 label = "${formatNumberWithCommas(selectedLineCount)} lines",
-                textColor = UmbrixColors.badgeLinesText,
-                backgroundColor = UmbrixColors.badgeLinesBackground
+                textColor = colors.badgeLinesText,
+                backgroundColor = colors.badgeLinesBackground
             )
 
             if (tab.isTemporalFocusActive) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Badge(
                     label = "Focus Mode Active",
-                    textColor = UmbrixColors.temporalFocusBadgeText,
-                    backgroundColor = UmbrixColors.temporalFocusBadgeBackground
+                    textColor = colors.temporalFocusBadgeText,
+                    backgroundColor = colors.temporalFocusBadgeBackground
                 )
             }
 
@@ -172,8 +173,8 @@ fun TemporalRangeScrubber(
                 Spacer(modifier = Modifier.width(6.dp))
                 Badge(
                     label = "Out-of-Order (Auto-Resolved)",
-                    textColor = UmbrixColors.latencyGapAmber,
-                    backgroundColor = UmbrixColors.surfaceElevated
+                    textColor = colors.latencyGapAmber,
+                    backgroundColor = colors.surfaceElevated
                 )
             }
 
@@ -271,7 +272,7 @@ fun TemporalRangeScrubber(
 
                     // Track base
                     drawRoundRect(
-                        color = Color(0xFF232529),
+                        color = colors.scrubberTrack,
                         topLeft = Offset(0f, 0f),
                         size = Size(trackWidth, trackHeight),
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(trackHeight / 2f, trackHeight / 2f)
@@ -288,9 +289,9 @@ fun TemporalRangeScrubber(
                             val xPos = ((gapLine.toDouble() / totalLines.toDouble()) * trackWidth).toFloat()
 
                             val tickColor = if (gapDuration >= 5_000_000L) {
-                                UmbrixColors.latencyGapRed
+                                colors.latencyGapRed
                             } else {
-                                UmbrixColors.latencyGapAmber
+                                colors.latencyGapAmber
                             }
 
                             drawRect(
@@ -309,7 +310,7 @@ fun TemporalRangeScrubber(
 
                     drawRoundRect(
                         brush = Brush.horizontalGradient(
-                            listOf(UmbrixColors.scrubberFillStart, UmbrixColors.scrubberFillEnd),
+                            listOf(colors.scrubberFillStart, colors.scrubberFillEnd),
                             startX = startX,
                             endX = endX
                         ),
@@ -326,8 +327,8 @@ fun TemporalRangeScrubber(
                         .offset { IntOffset(leftHandleOffsetPx.toInt(), 7.dp.roundToPx()) }
                         .size(14.dp)
                         .clip(CircleShape)
-                        .background(UmbrixColors.scrubberHandle)
-                        .border(1.5.dp, UmbrixColors.scrubberHandleBorder, CircleShape)
+                        .background(colors.scrubberHandle)
+                        .border(1.5.dp, colors.scrubberHandleBorder, CircleShape)
                 )
 
                 // Right Handle Knob
@@ -337,8 +338,8 @@ fun TemporalRangeScrubber(
                         .offset { IntOffset(rightHandleOffsetPx.toInt(), 7.dp.roundToPx()) }
                         .size(14.dp)
                         .clip(CircleShape)
-                        .background(UmbrixColors.scrubberHandle)
-                        .border(1.5.dp, UmbrixColors.scrubberHandleBorder, CircleShape)
+                        .background(colors.scrubberHandle)
+                        .border(1.5.dp, colors.scrubberHandleBorder, CircleShape)
                 )
             }
         }
@@ -351,17 +352,17 @@ fun TemporalRangeScrubber(
             Text(
                 text = formatEpochMicros(minMicros, includeDate = true),
                 fontSize = 10.sp,
-                color = UmbrixColors.textMuted
+                color = colors.textMuted
             )
             Text(
                 text = "Total Duration: ${formatDurationMicros(totalSpanMicros)}",
                 fontSize = 10.sp,
-                color = UmbrixColors.textDimmed
+                color = colors.textDimmed
             )
             Text(
                 text = formatEpochMicros(maxMicros, includeDate = true),
                 fontSize = 10.sp,
-                color = UmbrixColors.textMuted
+                color = colors.textMuted
             )
         }
     }

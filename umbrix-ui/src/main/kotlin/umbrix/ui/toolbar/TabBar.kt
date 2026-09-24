@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.jewel.ui.component.Text
 import umbrix.ui.state.WorkspaceTab
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 
 /**
  * Clean IntelliJ-style Tab Bar for multi-document workstation workflows.
@@ -38,14 +38,14 @@ fun TabBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(34.dp)
-            .background(UmbrixColors.surface)
+            .background(UmbrixTheme.colors.surface)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         tabs.forEachIndexed { index, tab ->
             val isActive = index == activeTabIndex
-            val tabBackground = if (isActive) UmbrixColors.surfaceElevated else UmbrixColors.surface
-            val textColor = if (isActive) UmbrixColors.textPrimary else UmbrixColors.textMuted
+            val tabBackground = if (isActive) UmbrixTheme.colors.surfaceElevated else UmbrixTheme.colors.surface
+            val textColor = if (isActive) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textMuted
 
             Row(
                 modifier = Modifier
@@ -67,7 +67,7 @@ fun TabBar(
                 Text(
                     text = "✕",
                     fontSize = 11.sp,
-                    color = UmbrixColors.textSubtle,
+                    color = UmbrixTheme.colors.textSubtle,
                     modifier = Modifier.clickable { onCloseTab(index) }
                 )
             }
@@ -84,7 +84,7 @@ fun TabBar(
                 text = "+",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
-                color = UmbrixColors.textMuted
+                color = UmbrixTheme.colors.textMuted
             )
         }
     }

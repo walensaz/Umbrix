@@ -28,7 +28,7 @@ import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import umbrix.core.search.SearchResult
 import umbrix.ui.components.Badge
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
@@ -69,7 +69,7 @@ fun SearchBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(UmbrixColors.surfacePanel)
+            .background(UmbrixTheme.colors.surfacePanel)
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         // --- Tier 1: Search Query & Match Controls ---
@@ -77,7 +77,7 @@ fun SearchBar(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Search:", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+            Text("Search:", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
             Spacer(modifier = Modifier.width(8.dp))
 
             TextField(
@@ -128,8 +128,8 @@ fun SearchBar(
             if (errorMessage != null) {
                 Badge(
                     label = errorMessage,
-                    textColor = UmbrixColors.badgeErrorText,
-                    backgroundColor = UmbrixColors.badgeErrorBackground
+                    textColor = UmbrixTheme.colors.badgeErrorText,
+                    backgroundColor = UmbrixTheme.colors.badgeErrorBackground
                 )
             } else if (searchResult != null) {
                 val count = searchResult.totalMatches()
@@ -137,8 +137,8 @@ fun SearchBar(
                 val suffix = if (searchResult.isComplete()) " (${durationMs}ms)" else " (searching...)"
                 Badge(
                     label = "$count matches$suffix",
-                    textColor = if (count > 0L) UmbrixColors.badgeSuccessText else UmbrixColors.badgeWarningText,
-                    backgroundColor = if (count > 0L) UmbrixColors.badgeSuccessBackground else UmbrixColors.badgeWarningBackground
+                    textColor = if (count > 0L) UmbrixTheme.colors.badgeSuccessText else UmbrixTheme.colors.badgeWarningText,
+                    backgroundColor = if (count > 0L) UmbrixTheme.colors.badgeSuccessBackground else UmbrixTheme.colors.badgeWarningBackground
                 )
             }
 
@@ -174,7 +174,7 @@ fun SearchBar(
             Text(
                 text = "✕",
                 fontSize = 14.sp,
-                color = UmbrixColors.textMuted,
+                color = UmbrixTheme.colors.textMuted,
                 modifier = Modifier
                     .clickable { onClose() }
                     .padding(horizontal = 6.dp, vertical = 2.dp)
@@ -190,7 +190,7 @@ fun SearchBar(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Anomalies:", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+            Text("Anomalies:", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
             Spacer(modifier = Modifier.width(8.dp))
 
             OutlinedButton(
@@ -209,7 +209,7 @@ fun SearchBar(
 
             Spacer(modifier = Modifier.width(16.dp))
 
-            Text("Quick Filters:", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+            Text("Quick Filters:", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
             Spacer(modifier = Modifier.width(8.dp))
 
             OutlinedButton(

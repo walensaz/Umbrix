@@ -44,7 +44,7 @@ import org.jetbrains.jewel.ui.component.Text
 import umbrix.core.minimap.MinimapDensityTable
 import umbrix.core.search.SearchResult
 import umbrix.core.session.LogSession
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatNumberWithCommas
 import kotlin.math.max
 
@@ -77,12 +77,13 @@ fun GpuSeismographMinimap(
 ) {
     var isHovered by remember { mutableStateOf(false) }
     var hoverOffset by remember { mutableStateOf<Offset?>(null) }
+    val colors = UmbrixTheme.colors
 
     BoxWithConstraints(
         modifier = Modifier
             .width(widthDp)
             .fillMaxHeight()
-            .background(UmbrixColors.surfaceGutter)
+            .background(colors.surfaceGutter)
             .onPointerEvent(PointerEventType.Enter) { isHovered = true }
             .onPointerEvent(PointerEventType.Exit) {
                 isHovered = false
@@ -144,7 +145,7 @@ fun GpuSeismographMinimap(
 
                 // Draw background track
                 drawRect(
-                    color = Color(0xFF141416),
+                    color = colors.surfaceGutter,
                     topLeft = Offset.Zero,
                     size = Size(canvasWidth, canvasHeight)
                 )
@@ -164,7 +165,7 @@ fun GpuSeismographMinimap(
                             // Base log density bar (subtle blue/gray)
                             val totalWidth = (total.toFloat() / maxTotal) * (canvasWidth * 0.45f)
                             drawRect(
-                                color = Color(0x334FC3F7),
+                                color = colors.minimapDensity,
                                 topLeft = Offset(0f, y),
                                 size = Size(totalWidth.coerceAtLeast(1f), binHeightPx)
                             )
@@ -174,7 +175,7 @@ fun GpuSeismographMinimap(
                             // Amber warning bar
                             val warnWidth = (warns.toFloat() / maxWarn) * (canvasWidth * 0.65f)
                             drawRect(
-                                color = Color(0xFFFFB74D),
+                                color = colors.minimapWarn,
                                 topLeft = Offset(0f, y),
                                 size = Size(warnWidth.coerceAtLeast(2f), binHeightPx)
                             )
@@ -184,7 +185,7 @@ fun GpuSeismographMinimap(
                             // Vibrant red error spike
                             val errorWidth = (errors.toFloat() / maxError) * canvasWidth
                             drawRect(
-                                color = Color(0xFFFF5252),
+                                color = colors.minimapError,
                                 topLeft = Offset(0f, y),
                                 size = Size(errorWidth.coerceAtLeast(4f), binHeightPx)
                             )
@@ -205,7 +206,7 @@ fun GpuSeismographMinimap(
                                 val matchLine = matching.select(i)
                                 val matchY = ((matchLine.toDouble() / totalLines.toDouble()) * canvasHeight).toFloat()
                                 drawRect(
-                                    color = Color(0xFFFFD54F),
+                                    color = colors.minimapMatch,
                                     topLeft = Offset(0f, matchY - 1f),
                                     size = Size(canvasWidth, 2.5f)
                                 )
@@ -227,17 +228,17 @@ fun GpuSeismographMinimap(
 
                     // Semi-transparent overlay with cyan border
                     drawRect(
-                        color = Color(0x22FFFFFF),
+                        color = colors.minimapViewportRect,
                         topLeft = Offset(0f, viewTopY),
                         size = Size(canvasWidth, viewHeight)
                     )
                     drawRect(
-                        color = Color(0x884FC3F7),
+                        color = colors.accentPrimary.copy(alpha = 0.53f),
                         topLeft = Offset(0f, viewTopY),
                         size = Size(canvasWidth, 1.5f)
                     )
                     drawRect(
-                        color = Color(0x884FC3F7),
+                        color = colors.accentPrimary.copy(alpha = 0.53f),
                         topLeft = Offset(0f, viewTopY + viewHeight - 1.5f),
                         size = Size(canvasWidth, 1.5f)
                     )
@@ -252,14 +253,14 @@ fun GpuSeismographMinimap(
 
                     if (focusTopY > 0f) {
                         drawRect(
-                            color = UmbrixColors.temporalFocusDimOverlay,
+                            color = colors.temporalFocusDimOverlay,
                             topLeft = Offset.Zero,
                             size = Size(canvasWidth, focusTopY)
                         )
                     }
                     if (focusBottomY < canvasHeight) {
                         drawRect(
-                            color = UmbrixColors.temporalFocusDimOverlay,
+                            color = colors.temporalFocusDimOverlay,
                             topLeft = Offset(0f, focusBottomY),
                             size = Size(canvasWidth, canvasHeight - focusBottomY)
                         )
@@ -267,12 +268,12 @@ fun GpuSeismographMinimap(
 
                     // Border indicators at focus boundaries
                     drawRect(
-                        color = Color(0xFF00E5FF),
+                        color = colors.accentSecondary,
                         topLeft = Offset(0f, focusTopY),
                         size = Size(canvasWidth, 1.5f)
                     )
                     drawRect(
-                        color = Color(0xFF00E5FF),
+                        color = colors.accentSecondary,
                         topLeft = Offset(0f, focusBottomY - 1.5f),
                         size = Size(canvasWidth, 1.5f)
                     )
@@ -295,32 +296,32 @@ fun GpuSeismographMinimap(
                 modifier = Modifier
                     .offset { IntOffset((-240).dp.roundToPx(), tooltipY.toInt()) }
                     .width(230.dp)
-                    .background(Color(0xFF1E1F22), RoundedCornerShape(6.dp))
-                    .border(1.dp, Color(0xFF334FC3F7), RoundedCornerShape(6.dp))
+                    .background(colors.surfaceTooltip, RoundedCornerShape(6.dp))
+                    .border(1.dp, colors.border, RoundedCornerShape(6.dp))
                     .padding(8.dp)
             ) {
                 Column {
                     Text(
                         text = "Lines ${formatNumberWithCommas(binStart + 1L)} – ${formatNumberWithCommas(binEnd + 1L)}",
-                        color = UmbrixColors.textPrimary,
+                        color = colors.textPrimary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (errs > 0) {
-                            Text("🔴 $errs Err", color = Color(0xFFFF5252), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                            Text("🔴 $errs Err", color = colors.severityError, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.width(6.dp))
                         }
                         if (warns > 0) {
-                            Text("🟡 $warns Warn", color = Color(0xFFFFB74D), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                            Text("🟡 $warns Warn", color = colors.severityWarn, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                             Spacer(modifier = Modifier.width(6.dp))
                         }
-                        Text("🔵 $infos Info", color = Color(0xFF4FC3F7), fontSize = 10.5.sp)
+                        Text("🔵 $infos Info", color = colors.severityInfo, fontSize = 10.5.sp)
                     }
                     if (errs > 0 || warns > 0) {
                         Spacer(modifier = Modifier.height(3.dp))
-                        Text("Click to jump to anomaly", color = Color(0xFF81D4FA), fontSize = 9.5.sp)
+                        Text("Click to jump to anomaly", color = colors.textLink, fontSize = 9.5.sp)
                     }
                 }
             }
@@ -331,7 +332,7 @@ fun GpuSeismographMinimap(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Color(0xD9141416))
+                .background(colors.surfaceGutter.copy(alpha = 0.85f))
                 .padding(vertical = 4.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -339,11 +340,11 @@ fun GpuSeismographMinimap(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(modifier = Modifier.size(6.dp).background(Color(0xFFFF5252), CircleShape))
+                Box(modifier = Modifier.size(6.dp).background(colors.severityError, CircleShape))
                 Spacer(modifier = Modifier.width(3.dp))
-                Box(modifier = Modifier.size(6.dp).background(Color(0xFFFFB74D), CircleShape))
+                Box(modifier = Modifier.size(6.dp).background(colors.severityWarn, CircleShape))
                 Spacer(modifier = Modifier.width(3.dp))
-                Box(modifier = Modifier.size(6.dp).background(Color(0xFF4FC3F7), CircleShape))
+                Box(modifier = Modifier.size(6.dp).background(colors.severityInfo, CircleShape))
             }
         }
     }

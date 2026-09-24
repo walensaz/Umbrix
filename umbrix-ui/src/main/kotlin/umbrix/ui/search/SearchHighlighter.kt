@@ -6,7 +6,8 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixThemeSpec
+import umbrix.ui.theme.themes.DarkCarbonTheme
 
 /**
  * Extracts individual query search terms / needles, ignoring boolean AST operators.
@@ -48,7 +49,8 @@ object HighlightCache {
         val text: String,
         val needlesHash: Int,
         val isMatch: Boolean,
-        val isActiveMatch: Boolean
+        val isActiveMatch: Boolean,
+        val themeName: String
     )
 
     private val lruMap = object : LinkedHashMap<CacheKey, AnnotatedString>(MAX_ENTRIES, 0.75f, true) {
@@ -62,19 +64,20 @@ object HighlightCache {
         rawText: String,
         needles: List<String>,
         isMatch: Boolean,
-        isActiveMatch: Boolean
+        isActiveMatch: Boolean,
+        theme: UmbrixThemeSpec = DarkCarbonTheme
     ): AnnotatedString {
         if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
             return AnnotatedString(rawText)
         }
 
-        val key = CacheKey(rawText, needles.hashCode(), isMatch, isActiveMatch)
+        val key = CacheKey(rawText, needles.hashCode(), isMatch, isActiveMatch, theme.name)
         val cached = lruMap[key]
         if (cached != null) {
             return cached
         }
 
-        val built = buildHighlightedLineDirect(rawText, needles, isMatch, isActiveMatch)
+        val built = buildHighlightedLineDirect(rawText, needles, isMatch, isActiveMatch, theme)
         lruMap[key] = built
         return built
     }
@@ -96,9 +99,10 @@ fun buildHighlightedLine(
     rawText: String,
     needles: List<String>,
     isMatch: Boolean,
-    isActiveMatch: Boolean
+    isActiveMatch: Boolean,
+    theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
-    return HighlightCache.getOrBuild(rawText, needles, isMatch, isActiveMatch)
+    return HighlightCache.getOrBuild(rawText, needles, isMatch, isActiveMatch, theme)
 }
 
 /**
@@ -108,7 +112,8 @@ private fun buildHighlightedLineDirect(
     rawText: String,
     needles: List<String>,
     isMatch: Boolean,
-    isActiveMatch: Boolean
+    isActiveMatch: Boolean,
+    theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
     if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
         return AnnotatedString(rawText)
@@ -147,8 +152,8 @@ private fun buildHighlightedLineDirect(
         }
     }
 
-    val highlightBackground = if (isActiveMatch) UmbrixColors.searchHighlightActive else UmbrixColors.searchHighlightInactive
-    val highlightTextColor = if (isActiveMatch) UmbrixColors.searchTextActive else UmbrixColors.searchTextInactive
+    val highlightBackground = if (isActiveMatch) theme.searchHighlightActive else theme.searchHighlightInactive
+    val highlightTextColor = if (isActiveMatch) theme.searchTextActive else theme.searchTextInactive
 
     return buildAnnotatedString {
         var cursor = 0
@@ -180,7 +185,12 @@ private fun buildHighlightedLineDirect(
 /**
  * Overlays an interactive text selection highlight onto an AnnotatedString line.
  */
-fun applySelectionHighlight(base: AnnotatedString, selectedRange: IntRange?): AnnotatedString {
+fun applySelectionHighlight(
+    base: AnnotatedString,
+    selectedRange: IntRange?,
+    selectionBackground: Color = DarkCarbonTheme.selectionBackground,
+    selectionTextColor: Color = Color.White
+): AnnotatedString {
     if (selectedRange == null || selectedRange.isEmpty() || base.isEmpty()) return base
     val clampedStart = selectedRange.first.coerceIn(0, base.length)
     val clampedEnd = (selectedRange.last + 1).coerceIn(0, base.length)
@@ -190,8 +200,8 @@ fun applySelectionHighlight(base: AnnotatedString, selectedRange: IntRange?): An
         append(base)
         addStyle(
             style = SpanStyle(
-                background = Color(0xFF214283),
-                color = Color.White
+                background = selectionBackground,
+                color = selectionTextColor
             ),
             start = clampedStart,
             end = clampedEnd

@@ -21,13 +21,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import org.jetbrains.jewel.ui.component.Text
 import umbrix.core.session.LogSession
 import umbrix.ui.state.WorkspaceTab
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatByteSize
 import umbrix.ui.util.formatEpochMicros
 import umbrix.ui.util.formatNumberWithCommas
@@ -61,7 +62,7 @@ fun BottomStatusBar(
         modifier = Modifier
             .fillMaxWidth()
             .height(26.dp)
-            .background(UmbrixColors.surfaceGutter)
+            .background(UmbrixTheme.colors.surfaceGutter)
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -70,7 +71,7 @@ fun BottomStatusBar(
             Text(
                 text = activeTab.indexingStatus,
                 fontSize = 11.sp,
-                color = UmbrixColors.progressText,
+                color = UmbrixTheme.colors.progressText,
                 fontWeight = FontWeight.Medium
             )
 
@@ -82,7 +83,7 @@ fun BottomStatusBar(
                     .width(140.dp)
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp))
-                    .background(UmbrixColors.surfaceElevated)
+                    .background(UmbrixTheme.colors.surfaceElevated)
             ) {
                 val progressFraction = (activeTab.indexingProgress / 100.0).toFloat().coerceIn(0f, 1f)
                 Box(
@@ -91,7 +92,7 @@ fun BottomStatusBar(
                         .fillMaxWidth(progressFraction)
                         .background(
                             Brush.horizontalGradient(
-                                listOf(UmbrixColors.progressGradientStart, UmbrixColors.progressGradientEnd)
+                                listOf(UmbrixTheme.colors.progressGradientStart, UmbrixTheme.colors.progressGradientEnd)
                             )
                         )
                 )
@@ -102,14 +103,14 @@ fun BottomStatusBar(
             Text(
                 text = "${activeTab.indexingProgress.toInt()}%",
                 fontSize = 10.sp,
-                color = UmbrixColors.progressText,
+                color = UmbrixTheme.colors.progressText,
                 fontWeight = FontWeight.Bold
             )
         } else {
             Text(
                 text = statusMessage,
                 fontSize = 11.sp,
-                color = UmbrixColors.textMuted
+                color = UmbrixTheme.colors.textMuted
             )
         }
 
@@ -139,12 +140,19 @@ fun BottomStatusBar(
             }
         }
 
+        val documentLabel = activeSession?.let { session ->
+            "Index ${session.indexingDurationMs()} ms | ${formatNumberWithCommas(session.totalLines())} lines | " +
+                "${formatByteSize(session.fileSizeBytes())} | ${session.simdVectorWidth() * 8}-bit SIMD"
+        }
         val memoryLabel = "JVM Heap: ${formatByteSize(jvmHeapUsedBytes)} | 0 bytes log data on GC heap"
+        val statusDetails = listOfNotNull(positionLabel, modeLabel, documentLabel, memoryLabel).joinToString(" | ")
 
         Text(
-            text = "$positionLabel | $modeLabel | $memoryLabel",
+            text = statusDetails,
             fontSize = 11.sp,
-            color = UmbrixColors.textDimmed
+            color = UmbrixTheme.colors.textDimmed,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

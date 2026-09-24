@@ -38,7 +38,7 @@ import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import umbrix.core.session.LogSession
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatEpochMicros
 import umbrix.ui.util.formatNumberWithCommas
 import umbrix.ui.util.parseTimestampStringToMicros
@@ -125,7 +125,7 @@ fun GoToTimestampDialog(
         Box(
             modifier = Modifier
                 .width(460.dp)
-                .background(UmbrixColors.surfacePanel, shape = RoundedCornerShape(8.dp))
+                .background(UmbrixTheme.colors.surfacePanel, shape = RoundedCornerShape(8.dp))
                 .padding(20.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -157,7 +157,7 @@ fun GoToTimestampDialog(
                         text = "Go to Line or Timestamp",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
-                        color = UmbrixColors.textPrimary
+                        color = UmbrixTheme.colors.textPrimary
                     )
 
                     // Mode Toggle Buttons
@@ -192,7 +192,7 @@ fun GoToTimestampDialog(
                     Text(
                         text = "Enter line number (1 – ${formatNumberWithCommas(totalLines)}):",
                         fontSize = 12.sp,
-                        color = UmbrixColors.textSecondary
+                        color = UmbrixTheme.colors.textSecondary
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -213,7 +213,7 @@ fun GoToTimestampDialog(
                     Text(
                         text = "Enter timestamp (e.g. '14:02:15.200' or '2026-09-23 14:02:15'):",
                         fontSize = 12.sp,
-                        color = UmbrixColors.textSecondary
+                        color = UmbrixTheme.colors.textSecondary
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -236,7 +236,7 @@ fun GoToTimestampDialog(
                         Text(
                             text = "File span: $startStr  →  $endStr",
                             fontSize = 10.5.sp,
-                            color = UmbrixColors.textMuted
+                            color = UmbrixTheme.colors.textMuted
                         )
                     }
                 }
@@ -246,7 +246,7 @@ fun GoToTimestampDialog(
                     Text(
                         text = errorMessage!!,
                         fontSize = 11.sp,
-                        color = UmbrixColors.badgeErrorText
+                        color = UmbrixTheme.colors.badgeErrorText
                     )
                 }
 

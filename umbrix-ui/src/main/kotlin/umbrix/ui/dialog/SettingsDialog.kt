@@ -27,6 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -34,18 +37,24 @@ import org.jetbrains.jewel.ui.Orientation
 import org.jetbrains.jewel.ui.component.Checkbox
 import org.jetbrains.jewel.ui.component.DefaultButton
 import org.jetbrains.jewel.ui.component.Divider
+import org.jetbrains.jewel.ui.component.Dropdown
 import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.RadioButton
+import org.jetbrains.jewel.ui.component.Slider
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import umbrix.ui.components.Badge
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.settings.WorkstationSettings
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.EditorTypography
+import umbrix.ui.theme.FontSpec
+import umbrix.ui.theme.ThemeRegistry
+import umbrix.ui.theme.UmbrixTheme
 
 private enum class SettingsCategory(val displayName: String, val icon: String) {
     APPEARANCE("Appearance & Minimap", "🗺"),
-    LANGUAGES("Log Languages & Profiles", "🔤"),
+    FONTS("Fonts & Typography", "🔤"),
+    LANGUAGES("Log Languages & Profiles", "🌐"),
     PERFORMANCE("Performance & SIMD", "⚡"),
     PLUGINS("Plugins & Analyzers", "🧩")
 }
@@ -61,6 +70,7 @@ fun SettingsDialog(
 ) {
     var activeCategory by remember { mutableStateOf(SettingsCategory.APPEARANCE) }
 
+    var themeName by remember { mutableStateOf(initialSettings.themeName) }
     var isMinimapEnabled by remember { mutableStateOf(initialSettings.isMinimapEnabled) }
     var minimapWidthDp by remember { mutableStateOf(initialSettings.minimapWidthDp) }
     var isSearchHighlightingEnabled by remember { mutableStateOf(initialSettings.isSearchHighlightingEnabled) }
@@ -73,7 +83,17 @@ fun SettingsDialog(
     var latencyGapThresholdMs by remember { mutableStateOf(initialSettings.latencyGapThresholdMs) }
     var latencyGapSevereThresholdMs by remember { mutableStateOf(initialSettings.latencyGapSevereThresholdMs) }
 
-    fun buildCurrent(): WorkstationSettings = WorkstationSettings(
+    var editorFontFamily by remember { mutableStateOf(initialSettings.editorFontFamily) }
+    var editorFontSizePt by remember { mutableStateOf(initialSettings.editorFontSizePt) }
+    var lineHeightMultiplier by remember { mutableStateOf(initialSettings.lineHeightMultiplier) }
+    var editorFontWeight by remember { mutableStateOf(initialSettings.editorFontWeight) }
+    var uiFontFamily by remember { mutableStateOf(initialSettings.uiFontFamily) }
+    var uiFontSizePt by remember { mutableStateOf(initialSettings.uiFontSizePt) }
+    var enableLigatures by remember { mutableStateOf(initialSettings.enableLigatures) }
+
+    // copy() preserves menu-driven state (recent files, viewport mode, view toggles) not edited here
+    fun buildCurrent(): WorkstationSettings = initialSettings.copy(
+        themeName = themeName,
         isMinimapEnabled = isMinimapEnabled,
         minimapWidthDp = minimapWidthDp,
         isSearchHighlightingEnabled = isSearchHighlightingEnabled,
@@ -84,8 +104,26 @@ fun SettingsDialog(
         enableSimdAcceleration = enableSimdAcceleration,
         isLatencyGapHighlightingEnabled = isLatencyGapHighlightingEnabled,
         latencyGapThresholdMs = latencyGapThresholdMs,
-        latencyGapSevereThresholdMs = latencyGapSevereThresholdMs
+        latencyGapSevereThresholdMs = latencyGapSevereThresholdMs,
+        editorFontFamily = editorFontFamily,
+        editorFontSizePt = editorFontSizePt,
+        lineHeightMultiplier = lineHeightMultiplier,
+        editorFontWeight = editorFontWeight,
+        uiFontFamily = uiFontFamily,
+        uiFontSizePt = uiFontSizePt,
+        enableLigatures = enableLigatures
     )
+
+    fun resetToDefaults() {
+        val defaults = WorkstationSettings()
+        editorFontFamily = defaults.editorFontFamily
+        editorFontSizePt = defaults.editorFontSizePt
+        lineHeightMultiplier = defaults.lineHeightMultiplier
+        editorFontWeight = defaults.editorFontWeight
+        uiFontFamily = defaults.uiFontFamily
+        uiFontSizePt = defaults.uiFontSizePt
+        enableLigatures = defaults.enableLigatures
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -97,15 +135,15 @@ fun SettingsDialog(
         ) {
             Column(
                 modifier = Modifier
-                    .size(780.dp, 520.dp)
-                    .background(UmbrixColors.surface, shape = RoundedCornerShape(8.dp))
-                    .border(1.dp, UmbrixColors.surfaceElevated, shape = RoundedCornerShape(8.dp))
+                    .size(800.dp, 560.dp)
+                    .background(UmbrixTheme.colors.surface, shape = RoundedCornerShape(8.dp))
+                    .border(1.dp, UmbrixTheme.colors.surfaceElevated, shape = RoundedCornerShape(8.dp))
             ) {
                 // --- Dialog Header ---
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(UmbrixColors.surfacePanel)
+                        .background(UmbrixTheme.colors.surfacePanel)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -113,13 +151,13 @@ fun SettingsDialog(
                         text = "Settings",
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = UmbrixColors.textPrimary
+                        color = UmbrixTheme.colors.textPrimary
                     )
                     Spacer(modifier = Modifier.weight(1f))
                     Text(
                         text = "✕",
                         fontSize = 13.sp,
-                        color = UmbrixColors.textMuted,
+                        color = UmbrixTheme.colors.textMuted,
                         modifier = Modifier
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -143,13 +181,13 @@ fun SettingsDialog(
                         modifier = Modifier
                             .width(220.dp)
                             .fillMaxHeight()
-                            .background(UmbrixColors.surfaceGutter)
+                            .background(UmbrixTheme.colors.surfaceGutter)
                             .padding(vertical = 8.dp)
                     ) {
                         for (category in SettingsCategory.values()) {
                             val isSelected = activeCategory == category
-                            val itemBg = if (isSelected) UmbrixColors.surfaceElevated else Color.Transparent
-                            val itemTextColor = if (isSelected) UmbrixColors.textPrimary else UmbrixColors.textSecondary
+                            val itemBg = if (isSelected) UmbrixTheme.colors.surfaceElevated else Color.Transparent
+                            val itemTextColor = if (isSelected) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
 
                             Row(
                                 modifier = Modifier
@@ -187,12 +225,107 @@ fun SettingsDialog(
                     ) {
                         when (activeCategory) {
                             SettingsCategory.APPEARANCE -> {
-                                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
                                     Text(
-                                        text = "Appearance & Seismograph Minimap",
+                                        text = "Appearance & Themes",
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = UmbrixColors.textPrimary
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    // Theme Selection Section
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Color Theme Preset",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                        ) {
+                                            // Dark themes column
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Dark Themes",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                                for (preset in ThemeRegistry.darkThemes()) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable { themeName = preset.name }
+                                                            .padding(vertical = 3.dp)
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = (themeName == preset.name),
+                                                            onClick = { themeName = preset.name }
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text(
+                                                            text = preset.displayName,
+                                                            fontSize = 12.sp,
+                                                            color = if (themeName == preset.name) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            // Light themes column
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Light Themes",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                                for (preset in ThemeRegistry.lightThemes()) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clickable { themeName = preset.name }
+                                                            .padding(vertical = 3.dp)
+                                                    ) {
+                                                        RadioButton(
+                                                            selected = (themeName == preset.name),
+                                                            onClick = { themeName = preset.name }
+                                                        )
+                                                        Spacer(modifier = Modifier.width(6.dp))
+                                                        Text(
+                                                            text = preset.displayName,
+                                                            fontSize = 12.sp,
+                                                            color = if (themeName == preset.name) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    Text(
+                                        text = "Viewport & Minimap",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = UmbrixTheme.colors.textPrimary
                                     )
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -209,7 +342,7 @@ fun SettingsDialog(
                                             Text(
                                                 text = "Minimap Strip Width:",
                                                 fontSize = 12.sp,
-                                                color = UmbrixColors.textSecondary
+                                                color = UmbrixTheme.colors.textSecondary
                                             )
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 for (widthVal in listOf(32, 48, 64, 80)) {
@@ -232,7 +365,292 @@ fun SettingsDialog(
                                             onCheckedChange = { isSearchHighlightingEnabled = it }
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Enable Search Match Highlighting (Yellow spans)")
+                                        Text("Enable Search Match Highlighting (Needle pills)")
+                                    }
+                                }
+                            }
+
+                            SettingsCategory.FONTS -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "Editor Typography",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    // 1. Editor Font
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Editor Font Family",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Dropdown(
+                                            modifier = Modifier.width(300.dp),
+                                            menuContent = {
+                                                for (font in EditorTypography.availableSystemMonospaceFonts) {
+                                                    selectableItem(
+                                                        selected = (editorFontFamily.equals(font, ignoreCase = true)),
+                                                        onClick = { editorFontFamily = font }
+                                                    ) {
+                                                        Text(font)
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Text(editorFontFamily)
+                                        }
+                                    }
+
+                                    // 2. Font Size
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Font Size",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    editorFontSizePt = (editorFontSizePt - 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                                                },
+                                                enabled = editorFontSizePt > FontSpec.MIN_FONT_SIZE
+                                            ) {
+                                                Text("-", fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = "${String.format("%.1f", editorFontSizePt)} pt",
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            OutlinedButton(
+                                                onClick = {
+                                                    editorFontSizePt = (editorFontSizePt + 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                                                },
+                                                enabled = editorFontSizePt < FontSpec.MAX_FONT_SIZE
+                                            ) {
+                                                Text("+", fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "(${FontSpec.MIN_FONT_SIZE.toInt()} pt – ${FontSpec.MAX_FONT_SIZE.toInt()} pt)",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
+                                        }
+                                    }
+
+                                    // 3. Line Height
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Line Height Multiplier",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Slider(
+                                                value = lineHeightMultiplier,
+                                                onValueChange = { newVal ->
+                                                    lineHeightMultiplier = (Math.round(newVal * 20.0f) / 20.0f).coerceIn(FontSpec.MIN_LINE_HEIGHT_MULT, FontSpec.MAX_LINE_HEIGHT_MULT)
+                                                },
+                                                valueRange = FontSpec.MIN_LINE_HEIGHT_MULT..FontSpec.MAX_LINE_HEIGHT_MULT,
+                                                modifier = Modifier.width(220.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "${String.format("%.2f", lineHeightMultiplier)}×",
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "(${FontSpec.MIN_LINE_HEIGHT_MULT}× – ${FontSpec.MAX_LINE_HEIGHT_MULT}×)",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
+                                        }
+                                    }
+
+                                    // 4. Font Weight
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Font Weight",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            listOf(
+                                                300 to "Light (300)",
+                                                400 to "Regular (400)",
+                                                500 to "Medium (500)",
+                                                700 to "Bold (700)"
+                                            ).forEach { (weightVal, label) ->
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.clickable { editorFontWeight = weightVal }
+                                                ) {
+                                                    RadioButton(
+                                                        selected = (editorFontWeight == weightVal),
+                                                        onClick = { editorFontWeight = weightVal }
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = label,
+                                                        fontSize = 12.sp,
+                                                        color = if (editorFontWeight == weightVal) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 5. Ligatures
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Checkbox(
+                                                checked = enableLigatures,
+                                                onCheckedChange = { enableLigatures = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Enable OpenType ligatures (!=, ->, ==, >=)",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 6. UI Chrome Typography
+                                    Text(
+                                        text = "UI Chrome Typography",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "UI Font Family",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Dropdown(
+                                            modifier = Modifier.width(300.dp),
+                                            menuContent = {
+                                                for (font in EditorTypography.availableSystemProportionalFonts) {
+                                                    selectableItem(
+                                                        selected = (uiFontFamily.equals(font, ignoreCase = true)),
+                                                        onClick = { uiFontFamily = font }
+                                                    ) {
+                                                        Text(font)
+                                                    }
+                                                }
+                                            }
+                                        ) {
+                                            Text(uiFontFamily)
+                                        }
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "UI Font Size",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            OutlinedButton(
+                                                onClick = {
+                                                    uiFontSizePt = (uiFontSizePt - 1.0f).coerceIn(FontSpec.MIN_UI_FONT_SIZE, FontSpec.MAX_UI_FONT_SIZE)
+                                                },
+                                                enabled = uiFontSizePt > FontSpec.MIN_UI_FONT_SIZE
+                                            ) {
+                                                Text("-", fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text(
+                                                text = "${String.format("%.1f", uiFontSizePt)} pt",
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            OutlinedButton(
+                                                onClick = {
+                                                    uiFontSizePt = (uiFontSizePt + 1.0f).coerceIn(FontSpec.MIN_UI_FONT_SIZE, FontSpec.MAX_UI_FONT_SIZE)
+                                                },
+                                                enabled = uiFontSizePt < FontSpec.MAX_UI_FONT_SIZE
+                                            ) {
+                                                Text("+", fontWeight = FontWeight.Bold)
+                                            }
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "(${FontSpec.MIN_UI_FONT_SIZE.toInt()} pt – ${FontSpec.MAX_UI_FONT_SIZE.toInt()} pt)",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 7. Live Preview
+                                    Text(
+                                        text = "Live Preview",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    val previewFontFamily = remember(editorFontFamily) {
+                                        EditorTypography.resolvedEditorFontFamily(editorFontFamily)
+                                    }
+                                    val previewFontWeight = remember(editorFontWeight) {
+                                        FontSpec(editorFontWeight = editorFontWeight).resolvedEditorWeight
+                                    }
+                                    val previewFeatureSettings = remember(enableLigatures) {
+                                        EditorTypography.resolveFontFeatureSettings(enableLigatures)
+                                    }
+                                    val previewSample = "2026-09-23 14:32:01.123 [main] INFO  com.app.Service - Starting application\n" +
+                                        "2026-09-23 14:32:01.456 [pool-3] ERROR com.app.Handler - NullPointerException\n" +
+                                        "    at com.app.Handler.process(Handler.java:42)\n" +
+                                        "2026-09-23 14:32:02.789 [worker-1] WARN  com.app.Queue - queue.size() >= 5000 -> latency != 0ms"
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(UmbrixTheme.colors.surfaceGutter, shape = RoundedCornerShape(6.dp))
+                                            .border(1.dp, UmbrixTheme.colors.border, shape = RoundedCornerShape(6.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Text(
+                                            text = previewSample,
+                                            fontFamily = previewFontFamily,
+                                            fontSize = editorFontSizePt.sp,
+                                            fontWeight = previewFontWeight,
+                                            style = TextStyle(
+                                                fontFeatureSettings = previewFeatureSettings,
+                                                lineHeight = (editorFontSizePt * lineHeightMultiplier).sp
+                                            ),
+                                            color = UmbrixTheme.colors.textEditor
+                                        )
                                     }
                                 }
                             }
@@ -243,12 +661,12 @@ fun SettingsDialog(
                                         text = "Log Language Profiles & Exception Formatting",
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = UmbrixColors.textPrimary
+                                        color = UmbrixTheme.colors.textPrimary
                                     )
                                     Text(
                                         text = "Configures multi-line stack trace folding and error severity keywords.",
                                         fontSize = 12.sp,
-                                        color = UmbrixColors.textMuted
+                                        color = UmbrixTheme.colors.textMuted
                                     )
 
                                     val profiles = listOf(
@@ -280,7 +698,7 @@ fun SettingsDialog(
                                     Divider(Orientation.Horizontal)
 
                                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Text("Custom Error Keywords (comma separated):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                        Text("Custom Error Keywords (comma separated):", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
                                         TextField(
                                             value = customErrorKeywords,
                                             onValueChange = { customErrorKeywords = it },
@@ -296,14 +714,14 @@ fun SettingsDialog(
                                         text = "Performance, SIMD & Memory Invariants",
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = UmbrixColors.textPrimary
+                                        color = UmbrixTheme.colors.textPrimary
                                     )
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Badge(
                                             label = "Hardware Vector Acceleration Active",
-                                            textColor = UmbrixColors.badgeSimdText,
-                                            backgroundColor = UmbrixColors.badgeSimdBackground
+                                            textColor = UmbrixTheme.colors.badgeSimdText,
+                                            backgroundColor = UmbrixTheme.colors.badgeSimdBackground
                                         )
                                     }
 
@@ -317,7 +735,7 @@ fun SettingsDialog(
                                     }
 
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text("Max Characters Per Line (Safety Clamp):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                        Text("Max Characters Per Line (Safety Clamp):", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             for (limit in listOf(2048, 4096, 8192)) {
                                                 OutlinedButton(
@@ -331,7 +749,7 @@ fun SettingsDialog(
                                         Text(
                                             text = "Protects Skia text shaper from multi-megabyte minified payloads.",
                                             fontSize = 11.sp,
-                                            color = UmbrixColors.textMuted
+                                            color = UmbrixTheme.colors.textMuted
                                         )
                                     }
 
@@ -341,7 +759,7 @@ fun SettingsDialog(
                                         text = "Temporal Navigation & Latency Gaps",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = UmbrixColors.textPrimary
+                                        color = UmbrixTheme.colors.textPrimary
                                     )
 
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -355,7 +773,7 @@ fun SettingsDialog(
 
                                     if (isLatencyGapHighlightingEnabled) {
                                         Column(modifier = Modifier.padding(start = 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Text("Warning Gap Threshold (Amber):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                            Text("Warning Gap Threshold (Amber):", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 for (ms in listOf(500L, 1000L, 2000L, 5000L)) {
                                                     OutlinedButton(
@@ -367,7 +785,7 @@ fun SettingsDialog(
                                                 }
                                             }
 
-                                            Text("Severe Gap Threshold (Red Outage):", fontSize = 12.sp, color = UmbrixColors.textSecondary)
+                                            Text("Severe Gap Threshold (Red Outage):", fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                                 for (ms in listOf(3000L, 5000L, 10000L)) {
                                                     OutlinedButton(
@@ -389,12 +807,12 @@ fun SettingsDialog(
                                         text = "Async Analyzers & Plugins SPI",
                                         fontSize = 14.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = UmbrixColors.textPrimary
+                                        color = UmbrixTheme.colors.textPrimary
                                     )
                                     Text(
                                         text = "Background analysis extensions that run asynchronously without blocking the viewport.",
                                         fontSize = 12.sp,
-                                        color = UmbrixColors.textMuted
+                                        color = UmbrixTheme.colors.textMuted
                                     )
 
                                     PluginCard(
@@ -426,11 +844,16 @@ fun SettingsDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(UmbrixColors.surfacePanel)
+                        .background(UmbrixTheme.colors.surfacePanel)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (activeCategory == SettingsCategory.FONTS) {
+                        OutlinedButton(onClick = { resetToDefaults() }) {
+                            Text("Reset to Defaults")
+                        }
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = onDismiss) {
                         Text("Cancel")
                     }
@@ -466,19 +889,19 @@ private fun PluginCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(UmbrixColors.surfaceElevated, shape = RoundedCornerShape(6.dp))
+            .background(UmbrixTheme.colors.surfaceElevated, shape = RoundedCornerShape(6.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = UmbrixColors.textPrimary)
+            Text(name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = UmbrixTheme.colors.textPrimary)
             Spacer(modifier = Modifier.weight(1f))
             Badge(
                 label = status,
-                textColor = if (status.startsWith("Active")) UmbrixColors.badgeSimdText else UmbrixColors.textMuted,
-                backgroundColor = if (status.startsWith("Active")) UmbrixColors.badgeSimdBackground else UmbrixColors.surfaceGutter
+                textColor = if (status.startsWith("Active")) UmbrixTheme.colors.badgeSimdText else UmbrixTheme.colors.textMuted,
+                backgroundColor = if (status.startsWith("Active")) UmbrixTheme.colors.badgeSimdBackground else UmbrixTheme.colors.surfaceGutter
             )
         }
-        Text(description, fontSize = 12.sp, color = UmbrixColors.textSecondary)
+        Text(description, fontSize = 12.sp, color = UmbrixTheme.colors.textSecondary)
     }
 }

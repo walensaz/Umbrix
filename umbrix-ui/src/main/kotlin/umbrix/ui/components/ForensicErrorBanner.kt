@@ -23,7 +23,7 @@ import org.jetbrains.jewel.ui.component.DefaultButton
 import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import umbrix.core.diagnostics.ForensicErrorReport
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
@@ -41,14 +41,14 @@ fun ForensicErrorBanner(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(UmbrixColors.badgeErrorBackground)
+            .background(UmbrixTheme.colors.badgeErrorBackground)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = "⚠",
             fontSize = 18.sp,
-            color = UmbrixColors.errorIconColor
+            color = UmbrixTheme.colors.errorIconColor
         )
         Spacer(modifier = Modifier.width(10.dp))
 
@@ -58,20 +58,20 @@ fun ForensicErrorBanner(
                     text = "Workstation Exception Intercepted: ${report.exceptionClassName()}",
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
-                    color = UmbrixColors.errorClassNameColor
+                    color = UmbrixTheme.colors.errorClassNameColor
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "[Thread: ${report.threadName()} #${report.threadId()}]",
                     fontSize = 11.sp,
-                    color = UmbrixColors.errorThreadColor
+                    color = UmbrixTheme.colors.errorThreadColor
                 )
             }
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = report.errorMessage(),
                 fontSize = 12.sp,
-                color = UmbrixColors.errorMessageColor,
+                color = UmbrixTheme.colors.errorMessageColor,
                 maxLines = 2
             )
             if (report.hasReportFile()) {
@@ -79,7 +79,7 @@ fun ForensicErrorBanner(
                 Text(
                     text = "Diagnostic report saved to: ${report.reportFilePathString()}",
                     fontSize = 11.sp,
-                    color = UmbrixColors.errorFilePathColor
+                    color = UmbrixTheme.colors.errorFilePathColor
                 )
             }
         }

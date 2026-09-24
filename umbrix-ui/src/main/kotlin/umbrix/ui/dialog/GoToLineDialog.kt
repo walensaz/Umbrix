@@ -37,7 +37,7 @@ import org.jetbrains.jewel.ui.component.DefaultButton
 import org.jetbrains.jewel.ui.component.OutlinedButton
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
-import umbrix.ui.theme.UmbrixColors
+import umbrix.ui.theme.UmbrixTheme
 import umbrix.ui.util.formatNumberWithCommas
 
 /**
@@ -86,7 +86,7 @@ fun GoToLineDialog(
         Box(
             modifier = Modifier
                 .width(420.dp)
-                .background(UmbrixColors.surfacePanel, shape = RoundedCornerShape(8.dp))
+                .background(UmbrixTheme.colors.surfacePanel, shape = RoundedCornerShape(8.dp))
                 .padding(20.dp)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -113,7 +113,7 @@ fun GoToLineDialog(
                     text = "Go to Line",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
-                    color = UmbrixColors.textPrimary
+                    color = UmbrixTheme.colors.textPrimary
                 )
 
                 Spacer(modifier = Modifier.height(6.dp))
@@ -121,7 +121,7 @@ fun GoToLineDialog(
                 Text(
                     text = "Enter line number (1 – ${formatNumberWithCommas(totalLines)}):",
                     fontSize = 12.sp,
-                    color = UmbrixColors.textSecondary
+                    color = UmbrixTheme.colors.textSecondary
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -145,7 +145,7 @@ fun GoToLineDialog(
                     Text(
                         text = errorMessage!!,
                         fontSize = 11.sp,
-                        color = UmbrixColors.badgeErrorText
+                        color = UmbrixTheme.colors.badgeErrorText
                     )
                 }
 
