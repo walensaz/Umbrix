@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
@@ -129,6 +130,11 @@ fun LogViewportCanvas(
         val rowHeightPx = (fonts.editorFontSizePt * fonts.lineHeightMultiplier + 4.0f) * density.density
         val visibleRowCount = ((maxHeight - 12.dp) / rowHeightDp).toInt().coerceAtLeast(1)
         val renderRowCount = visibleRowCount + 2
+
+        // Publish so UmbrixMainScreen centering math can offset topVisibleLine by half this count.
+        if (tab != null && tab.visibleRowCount != visibleRowCount) {
+            tab.visibleRowCount = visibleRowCount
+        }
 
         val textMeasurer = rememberTextMeasurer()
         val measuredCharWidthPx = remember(fonts.editorFontSizePt, fonts.editorFontFamily, fonts.editorFontWeight, density) {
@@ -326,7 +332,9 @@ fun LogViewportCanvas(
                             } else ""
 
                             val isMatch = searchResult != null && physicalLine >= 0 && searchResult.matchingLines().contains(physicalLine)
-                            val isActiveMatch = isMatch && virtualRowIndex == tab.topVisibleLine
+                            // isActiveMatch tracks the pinned navigate-to line (selectedLineIndex), not the current
+                            // scroll-top row. This keeps the active match highlighted even when the user scrolls.
+                            val isActiveMatch = isMatch && tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
                             val isSelected = tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
 
                             val lineNumberColor = when {
@@ -442,6 +450,18 @@ fun LogViewportCanvas(
                     }
                 }
 
+                // Reset the accumulated max line width whenever the view mode changes (filtered ↔ full ↔
+                // temporal). The line population is entirely different in each mode so the old max would
+                // otherwise over-extend the scroll canvas with phantom width from the previous mode.
+                LaunchedEffect(tab.isFilteredView, tab.isTemporalFocusActive) {
+                    tab.maxObservedContentWidthPx = 0f
+                }
+
+                // Compute a stable dp floor from the running max. The widthIn(min=) below pins the
+                // scrollable canvas to at least this width so vertical scrolling never causes
+                // ScrollState.maxValue to shrink and yank the user's horizontal position.
+                val stableMinWidthDp = with(density) { tab.maxObservedContentWidthPx.toDp() }
+
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -461,6 +481,7 @@ fun LogViewportCanvas(
                         ) {
                             Column(
                                 modifier = Modifier
+                                    .widthIn(min = stableMinWidthDp)
                                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
                                     .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)))
                                     .pointerInput(tab, renderRowCount, fonts.editorFontSizePt, fonts.lineHeightMultiplier) {
@@ -535,7 +556,9 @@ fun LogViewportCanvas(
                                         }
                                     } else Pair("", false)
 
-                                    val isActiveMatch = isMatch && virtualRowIndex == tab.topVisibleLine
+                                    // isActiveMatch tracks the pinned navigate-to line (selectedLineIndex), not the current
+                                    // scroll-top row. This keeps the active match highlighted even when the user scrolls.
+                                    val isActiveMatch = isMatch && tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
                                     val isSelected = tab.selectedLineIndex != null && physicalLine >= 0 && tab.selectedLineIndex == physicalLine
 
                                     val rowBackgroundColor = when {
@@ -583,6 +606,14 @@ fun LogViewportCanvas(
                                             softWrap = false,
                                             onTextLayout = { layoutResult ->
                                                 textLayoutResults[rowIndex] = layoutResult
+                                                // Ratchet: grow the max observed width but never shrink it.
+                                                // Using layoutResult.size.width captures the full unsoftWrapped
+                                                // pixel extent of the line, which matches what the scroll canvas
+                                                // needs to size itself against.
+                                                val renderedLineWidthPx = layoutResult.size.width.toFloat()
+                                                if (renderedLineWidthPx > tab.maxObservedContentWidthPx) {
+                                                    tab.maxObservedContentWidthPx = renderedLineWidthPx
+                                                }
                                                 if (layoutResult.layoutInput.text.isNotEmpty() && rowIndex == 0) {
                                                     val textLen = layoutResult.layoutInput.text.length
                                                     val lineWidth = layoutResult.getLineRight(0)

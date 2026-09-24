@@ -257,7 +257,10 @@ fun UmbrixMainScreen(
                                         tab.topVisibleLine = 0L
                                         tab.selectedLineIndex = 0L
                                     } else {
-                                        tab.topVisibleLine = firstLine
+                                        // Center the match in the viewport: offset topVisibleLine so the
+                                        // match row lands in the middle rather than at the top edge.
+                                        val halfVisible = (tab.visibleRowCount / 2).toLong()
+                                        tab.topVisibleLine = (firstLine - halfVisible).coerceAtLeast(0L)
                                         tab.selectedLineIndex = firstLine
                                     }
                                 }
@@ -284,7 +287,8 @@ fun UmbrixMainScreen(
                                     tab.topVisibleLine = 0L
                                     tab.selectedLineIndex = 0L
                                 } else {
-                                    tab.topVisibleLine = firstLine
+                                    val halfVisible = (tab.visibleRowCount / 2).toLong()
+                                    tab.topVisibleLine = (firstLine - halfVisible).coerceAtLeast(0L)
                                     tab.selectedLineIndex = firstLine
                                 }
                             }
@@ -318,33 +322,42 @@ fun UmbrixMainScreen(
             if (tab.isFilteredView) {
                 val totalFiltered = result.totalMatches()
                 if (totalFiltered <= 0L) return
+                // In filtered mode the virtual line IS the match index — step within it.
+                val currentVirtual = tab.selectedLineIndex ?: tab.topVisibleLine
                 val targetVirtualLine = if (forward) {
-                    if (tab.topVisibleLine + 1L < totalFiltered) tab.topVisibleLine + 1L else 0L
+                    if (currentVirtual + 1L < totalFiltered) currentVirtual + 1L else 0L
                 } else {
-                    if (tab.topVisibleLine - 1L >= 0L) tab.topVisibleLine - 1L else totalFiltered - 1L
+                    if (currentVirtual - 1L >= 0L) currentVirtual - 1L else totalFiltered - 1L
                 }
                 tab.topVisibleLine = targetVirtualLine
                 tab.selectedLineIndex = targetVirtualLine
+                tab.subLineScrollOffsetPx = 0f
             } else {
+                // Step from the currently highlighted match line, not the scroll-top, so that
+                // navigating after a manual scroll continues from the last highlighted result.
+                val anchorLine = tab.selectedLineIndex ?: tab.topVisibleLine
                 val targetLine = if (forward) {
-                    val nextLine = result.findNextLine(tab.topVisibleLine + 1L)
+                    val nextLine = result.findNextLine(anchorLine + 1L)
                     if (nextLine >= 0L) {
                         nextLine
                     } else {
                         val firstLine = result.findNextLine(0L)
-                        if (firstLine >= 0L) firstLine else tab.topVisibleLine
+                        if (firstLine >= 0L) firstLine else anchorLine
                     }
                 } else {
-                    val prevLine = result.findPreviousLine(tab.topVisibleLine - 1L)
+                    val prevLine = result.findPreviousLine(anchorLine - 1L)
                     if (prevLine >= 0L) {
                         prevLine
                     } else {
                         val lastLine = result.findPreviousLine(tab.session.totalLines() - 1L)
-                        if (lastLine >= 0L) lastLine else tab.topVisibleLine
+                        if (lastLine >= 0L) lastLine else anchorLine
                     }
                 }
-                tab.topVisibleLine = targetLine
+                // Center the viewport so the match lands in the middle of the visible area.
+                val halfVisible = (tab.visibleRowCount / 2).toLong()
+                tab.topVisibleLine = (targetLine - halfVisible).coerceAtLeast(0L)
                 tab.selectedLineIndex = targetLine
+                tab.subLineScrollOffsetPx = 0f
             }
         } catch (e: Throwable) {
             if (ForensicErrorReportGenerator.isFatal(e)) throw e

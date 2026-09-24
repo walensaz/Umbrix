@@ -1,11 +1,13 @@
 package umbrix.ui.search
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.geometry.Offset
 import umbrix.ui.theme.UmbrixThemeSpec
 import umbrix.ui.theme.themes.DarkCarbonTheme
 
@@ -154,6 +156,22 @@ private fun buildHighlightedLineDirect(
 
     val highlightBackground = if (isActiveMatch) theme.searchHighlightActive else theme.searchHighlightInactive
     val highlightTextColor = if (isActiveMatch) theme.searchTextActive else theme.searchTextInactive
+    // A diffuse shadow behind the highlight chip gives a halo that reads as visual padding
+    // around the match — the blur radius is intentionally generous (4px active, 2px inactive)
+    // so the orange/amber glow bleeds slightly past the character cell boundaries.
+    val highlightShadow = if (isActiveMatch) {
+        Shadow(
+            color = theme.searchHighlightActive.copy(alpha = 0.75f),
+            offset = Offset.Zero,
+            blurRadius = 8f
+        )
+    } else {
+        Shadow(
+            color = theme.searchHighlightInactive.copy(alpha = 0.45f),
+            offset = Offset.Zero,
+            blurRadius = 4f
+        )
+    }
 
     return buildAnnotatedString {
         var cursor = 0
@@ -168,7 +186,8 @@ private fun buildHighlightedLineDirect(
                     SpanStyle(
                         background = highlightBackground,
                         color = highlightTextColor,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        shadow = highlightShadow
                     )
                 ) {
                     append(rawText.substring(start, end))

@@ -45,8 +45,11 @@ object DarkCarbonTheme : UmbrixThemeSpec {
 
     // Row Selection & Search
     override val rowSelected: Color = Color(0x332675D9)
-    override val rowActiveMatch: Color = Color(0x284FC3F7)
-    override val rowMatch: Color = Color(0x104FC3F7)
+    // Raised from 0x28 → 0x55 (33%) so the active match row is a clearly visible beacon,
+    // giving the highlight a strong perceptual "margin" around the match needle.
+    override val rowActiveMatch: Color = Color(0x554FC3F7)
+    // Raised from 0x10 → 0x22 for secondary matches to be readable without drowning the active.
+    override val rowMatch: Color = Color(0x224FC3F7)
     override val rowFilteredMatch: Color = Color(0x0C4FC3F7)
     override val searchHighlightActive: Color = Color(0xFFFF9800)
     override val searchHighlightInactive: Color = Color(0x66FFD54F)

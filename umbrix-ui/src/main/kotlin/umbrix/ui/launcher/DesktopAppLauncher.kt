@@ -24,6 +24,8 @@ import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkstationKeyDispatcher
 import umbrix.ui.theme.ThemeRegistry
 import umbrix.ui.theme.UmbrixTheme
+import java.awt.GraphicsEnvironment
+import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import java.awt.dnd.DnDConstants
 import java.awt.dnd.DropTarget
@@ -45,7 +47,17 @@ object DesktopAppLauncher {
 
         try {
             application {
-                val windowState = rememberWindowState(width = 1380.dp, height = 860.dp)
+                val defaultConfiguration = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                    .defaultScreenDevice.defaultConfiguration
+                val startupWorkArea = DesktopWindowGeometry.usableBounds(
+                    defaultConfiguration.bounds,
+                    Toolkit.getDefaultToolkit().getScreenInsets(defaultConfiguration)
+                )
+                val startupWindowSize = DesktopWindowGeometry.initialSize(startupWorkArea)
+                val windowState = rememberWindowState(
+                    width = startupWindowSize.width.dp,
+                    height = startupWindowSize.height.dp
+                )
 
                 Window(
                     onCloseRequest = {
@@ -67,6 +79,10 @@ object DesktopAppLauncher {
                     val menuActionFlow = remember(menuActionChannel) { menuActionChannel.receiveAsFlow() }
 
                     DisposableEffect(window) {
+                        window.maximizedBounds = DesktopWindowGeometry.usableBounds(
+                            window.graphicsConfiguration.bounds,
+                            Toolkit.getDefaultToolkit().getScreenInsets(window.graphicsConfiguration)
+                        )
                         val dropTarget = object : DropTarget() {
                             @Synchronized
                             override fun drop(evt: DropTargetDropEvent) {
@@ -110,6 +126,10 @@ object DesktopAppLauncher {
                                 onMenuAction = { menuAction -> menuActionChannel.trySend(menuAction) },
                                 onMinimize = { windowState.isMinimized = true },
                                 onToggleMaximize = {
+                                    window.maximizedBounds = DesktopWindowGeometry.usableBounds(
+                                        window.graphicsConfiguration.bounds,
+                                        Toolkit.getDefaultToolkit().getScreenInsets(window.graphicsConfiguration)
+                                    )
                                     windowState.placement = if (windowState.placement == WindowPlacement.Maximized) {
                                         WindowPlacement.Floating
                                     } else {
