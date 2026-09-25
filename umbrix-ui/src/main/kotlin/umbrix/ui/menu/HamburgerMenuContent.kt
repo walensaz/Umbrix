@@ -58,6 +58,13 @@ fun ColumnScope.HamburgerMenuContent(
         }
     }
 
+    UmbrixMenuItem(
+        text = "Export Sub-File...",
+        shortcut = "Ctrl+Shift+S",
+        icon = { UmbrixMenuGlyph("⤓") },
+        onClick = { onAction(MenuAction.ExportSubFile) }
+    )
+
     UmbrixMenuSeparator()
 
     // --- Section 2: Search & Navigation ---
@@ -157,6 +164,13 @@ fun ColumnScope.HamburgerMenuContent(
     UmbrixMenuSeparator()
 
     // --- Section 6: About & Exit ---
+    UmbrixMenuItem(
+        text = "Keyboard Shortcuts",
+        shortcut = "F1",
+        icon = { UmbrixMenuGlyph("⌨") },
+        onClick = { onAction(MenuAction.KeyboardShortcuts) }
+    )
+
     UmbrixMenuItem(
         text = "About Umbrix",
         icon = { UmbrixMenuGlyph("❓") },

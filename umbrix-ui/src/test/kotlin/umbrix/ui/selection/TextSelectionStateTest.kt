@@ -6,6 +6,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class TextSelectionStateTest {
 
@@ -63,5 +64,45 @@ class TextSelectionStateTest {
         assertEquals(5, bounds.first.charOffset)
         assertEquals(15L, bounds.second.lineIndex)
         assertEquals(20, bounds.second.charOffset)
+    }
+
+    @Test
+    fun reverseMultilineCopyUsesDisplayedRowOrder() {
+        val state = TextSelectionState()
+        state.startPosition = TextPosition(2L, 3)
+        state.endPosition = TextPosition(0L, 2)
+        val rows = listOf("abcdef", "middle", "12345")
+
+        assertEquals("cdef\nmiddle\n123", state.extractSelectedText(rows.size.toLong(), { rows[it.toInt()] }))
+        assertEquals(2 until 6, state.getSelectedRangeForLine(0L, rows[0].length))
+        assertEquals(0 until 3, state.getSelectedRangeForLine(2L, rows[2].length))
+    }
+
+    @Test
+    fun filteredAndTemporalCopyResolveVirtualRows() {
+        val state = TextSelectionState()
+        state.startPosition = TextPosition(0L, 1)
+        state.endPosition = TextPosition(2L, 2)
+        val physical = mapOf(4L to "four", 18L to "eighteen", 91L to "ninety")
+        val matchedLines = longArrayOf(4L, 18L, 91L)
+        assertEquals("our\neighteen\nni", state.extractSelectedText(3L, { physical.getValue(matchedLines[it.toInt()]) }))
+
+        val temporal = mapOf(100L to "first", 101L to "second", 102L to "third")
+        assertEquals("irst\nsecond\nth", state.extractSelectedText(3L, { temporal.getValue(100L + it) }))
+    }
+
+    @Test
+    fun largeCopyIsRejectedBeforeReadingUnboundedRows() {
+        val state = TextSelectionState()
+        state.startPosition = TextPosition(0L, 0)
+        state.endPosition = TextPosition(20_000L, 1)
+        assertFailsWith<SelectionTooLargeException> {
+            state.extractSelectedText(30_000L, { error("Should not read log rows") })
+        }
+
+        state.endPosition = TextPosition(2L, 1)
+        assertFailsWith<SelectionTooLargeException> {
+            state.extractSelectedText(3L, { "abc" }, maxCopyChars = 5)
+        }
     }
 }

@@ -33,7 +33,14 @@ data class WorkstationSettings(
     val viewportMode: ViewportLayoutMode = ViewportLayoutMode.EXPANDABLE,
     val showLineNumbers: Boolean = true,
     val showWhitespaceChars: Boolean = false,
-    val recentFiles: List<String> = emptyList()
+    val recentFiles: List<String> = emptyList(),
+
+    // --- Status Bar Telemetry Customization ---
+    val statusBarShowPosition: Boolean = true,
+    val statusBarShowDocumentStats: Boolean = true,
+    val statusBarShowMode: Boolean = true,
+    val statusBarShowIndexingDetails: Boolean = false,
+    val statusBarShowMemory: Boolean = false
 ) {
     /**
      * Returns a copy with [filePath] promoted to the head of [recentFiles], de-duplicated

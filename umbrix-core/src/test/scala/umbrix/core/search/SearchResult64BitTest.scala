@@ -64,6 +64,34 @@ class SearchResult64BitTest extends FunSuite {
     assertEquals(result.findPreviousLine(lineA.value - 1L), -1L)
   }
 
+  test("SearchResult.constrainToRange constrains matching lines to startLine..endLine") {
+    val bitmap = new Roaring64NavigableMap()
+    bitmap.addLong(10L)
+    bitmap.addLong(50L)
+    bitmap.addLong(100L)
+    bitmap.addLong(150L)
+    bitmap.addLong(200L)
+
+    val original = SearchResult(bitmap, 5L, 100L, isComplete = true)
+    val constrained = original.constrainToRange(50L, 150L)
+
+    assertEquals(constrained.totalMatches, 3L)
+    assert(!constrained.matchingLines.contains(10L))
+    assert(constrained.matchingLines.contains(50L))
+    assert(constrained.matchingLines.contains(100L))
+    assert(constrained.matchingLines.contains(150L))
+    assert(!constrained.matchingLines.contains(200L))
+
+    // Edge cases: empty range or range with no matches
+    val emptyResult = original.constrainToRange(500L, 600L)
+    assertEquals(emptyResult.totalMatches, 0L)
+    assert(emptyResult.isEmpty)
+
+    val invertedRange = original.constrainToRange(100L, 50L)
+    assertEquals(invertedRange.totalMatches, 0L)
+    assert(invertedRange.isEmpty)
+  }
+
   test("FilteredLineView translates virtual coordinates beyond 2.14 billion lines") {
     val bitmap = new Roaring64NavigableMap()
     val line1: LineIndex = LineIndex(3_000_000_000L)

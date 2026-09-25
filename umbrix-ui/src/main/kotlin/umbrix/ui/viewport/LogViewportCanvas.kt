@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isCtrlPressed as isPointerCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed as isPointerMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isPointerShiftPressed
@@ -67,6 +69,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import java.awt.Cursor
@@ -76,6 +79,10 @@ import umbrix.ui.search.applySelectionHighlight
 import umbrix.ui.search.buildHighlightedLine
 import umbrix.ui.search.extractSearchNeedles
 import umbrix.ui.selection.TextPosition
+import umbrix.ui.selection.ClickSequence
+import umbrix.ui.selection.ClickUnit
+import umbrix.ui.selection.clickSpan
+import umbrix.ui.selection.extendClickSelection
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.theme.EditorTypography
@@ -108,6 +115,7 @@ fun LogViewportCanvas(
     }
 
     BoxWithConstraints(modifier = modifier) {
+        val canvasMaxWidth = maxWidth
         val session = tab?.session
         val searchResult = tab?.searchResult
         val isFilteredMode = tab?.isFilteredView == true && searchResult != null
@@ -134,6 +142,13 @@ fun LogViewportCanvas(
         // Publish so UmbrixMainScreen centering math can offset topVisibleLine by half this count.
         if (tab != null && tab.visibleRowCount != visibleRowCount) {
             tab.visibleRowCount = visibleRowCount
+        }
+
+        // Defensive clamp: ensure topVisibleLine never scrolls past the end of the total virtual lines
+        // (prevents blank screen glitches during mode switches or range-constrained searches).
+        val maxTopVisible = maxOf(0L, totalLinesCount - visibleRowCount)
+        if (tab != null && tab.topVisibleLine > maxTopVisible) {
+            tab.topVisibleLine = maxTopVisible
         }
 
         val textMeasurer = rememberTextMeasurer()
@@ -173,7 +188,9 @@ fun LogViewportCanvas(
         } else {
             val horizontalScrollState = rememberScrollState()
             val viewportFocusRequester = remember { FocusRequester() }
-            val textLayoutResults = remember { mutableMapOf<Int, TextLayoutResult>() }
+            val textLayoutResults = remember(tab, searchResult, isFilteredMode, isTemporalMode, temporalStartLine) {
+                mutableMapOf<Int, Triple<Long, Long, TextLayoutResult>>()
+            }
             var dynamicCharWidthPx by remember(measuredCharWidthPx) { mutableStateOf(measuredCharWidthPx) }
 
             Row(
@@ -316,7 +333,7 @@ fun LogViewportCanvas(
                                 .graphicsLayer { translationY = -tab.subLineScrollOffsetPx }
                         ) {
                         for (rowIndex in 0 until renderRowCount) {
-                            val virtualRowIndex = tab.topVisibleLine + rowIndex
+                            val virtualRowIndex = SelectionEdgeScroll.virtualRowAt(tab.topVisibleLine, rowIndex, totalLinesCount)
                             val isRowValid = virtualRowIndex < totalLinesCount
 
                             val physicalLine = if (isRowValid) {
@@ -410,41 +427,27 @@ fun LogViewportCanvas(
 
                 // --- Content: Monospaced Log Text Rows ---
                 val isHighlightEnabled = SettingsManager.currentSettings.isSearchHighlightingEnabled
-                val searchNeedles = remember(tab.searchQuery, isHighlightEnabled) {
+                val isRegexMode = tab.isSearchRegex
+                val searchNeedles = remember(tab.searchQuery, isRegexMode, isHighlightEnabled) {
                     if (isHighlightEnabled) {
-                        extractSearchNeedles(tab.searchQuery)
+                        extractSearchNeedles(tab.searchQuery, isRegex = isRegexMode)
                     } else {
                         emptyList()
                     }
                 }
 
-                // Horizontal auto-scroll to reveal match column when navigating
-                LaunchedEffect(tab.topVisibleLine, tab.searchResult, tab.isFilteredView) {
-                    if (tab.searchResult != null && tab.searchQuery.isNotBlank() && !tab.searchResult!!.isEmpty) {
-                        val lineText = try {
-                            if (isFilteredMode && filteredView != null) {
-                                filteredView.getVirtualLineText(tab.topVisibleLine, ViewportState.MAX_SHAPED_CHARS)
-                            } else {
-                                session.getLineText(tab.topVisibleLine, ViewportState.MAX_SHAPED_CHARS)
-                            }
-                        } catch (_: Exception) { "" }
-
-                        var firstMatchCol = -1
-                        val lowerText = lineText.lowercase()
-                        for (needle in searchNeedles) {
-                            if (needle.isNotBlank()) {
-                                val idx = lowerText.indexOf(needle.lowercase())
-                                if (idx != -1 && (firstMatchCol == -1 || idx < firstMatchCol)) {
-                                    firstMatchCol = idx
-                                }
-                            }
-                        }
-
-                        if (firstMatchCol > 20) {
-                            val targetCharOffset = (firstMatchCol - 15).coerceAtLeast(0)
-                            val targetScrollPx = (targetCharOffset * measuredCharWidthPx).toInt()
+                // Horizontal auto-scroll to center the active match column ONLY when navigating explicitly.
+                // Does NOT run on vertical scrolling (searchNavigationGeneration is only incremented by navigation).
+                LaunchedEffect(tab.searchNavigationGeneration) {
+                    if (tab.searchNavigationGeneration > 0 && tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                        val matchCol = tab.selectedMatchColumn
+                        if (matchCol >= 0) {
+                            val minimapWidth = if (SettingsManager.currentSettings.isMinimapEnabled) SettingsManager.currentSettings.minimapWidthDp.dp else 0.dp
+                            val viewportWidthPx = with(density) { (canvasMaxWidth - gutterWidth - minimapWidth).toPx() }
+                            val matchPx = matchCol * dynamicCharWidthPx
+                            val targetScrollPx = (matchPx - viewportWidthPx / 2f).toInt().coerceAtLeast(0)
                             horizontalScrollState.animateScrollTo(targetScrollPx)
-                        } else if (firstMatchCol >= 0) {
+                        } else {
                             horizontalScrollState.animateScrollTo(0)
                         }
                     }
@@ -473,6 +476,151 @@ fun LogViewportCanvas(
                             .weight(1f)
                             .fillMaxWidth()
                             .clipToBounds()
+                            .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)))
+                            .pointerInput(tab, totalLinesCount, searchResult, isFilteredMode, isTemporalMode, temporalStartLine, rowHeightPx) {
+                                val clicks = ClickSequence()
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    if (totalLinesCount > 0L && currentEvent.buttons.isPrimaryPressed) {
+                                        val paddingStartPx = with(density) { 8.dp.toPx() }
+                                        var pointerPosition = down.position
+                                        val viewportWidthPx = size.width.toFloat()
+                                        val viewportHeightPx = size.height.toFloat()
+
+                                        fun updateSelectionEndpoint(): TextPosition {
+                                            val x = (pointerPosition.x.coerceIn(0f, (viewportWidthPx - 1f).coerceAtLeast(0f)) +
+                                                horizontalScrollState.value - paddingStartPx).coerceAtLeast(0f)
+                                            val y = pointerPosition.y.coerceIn(0f, (viewportHeightPx - 1f).coerceAtLeast(0f)) +
+                                                tab.subLineScrollOffsetPx
+                                            val rowIndex = (y / rowHeightPx).toInt().coerceIn(0, renderRowCount - 1)
+                                            val virtualRow = SelectionEdgeScroll.virtualRowAt(tab.topVisibleLine, rowIndex, totalLinesCount)
+                                                .coerceIn(0L, totalLinesCount - 1L)
+                                            val physicalLine = when {
+                                                isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRow)
+                                                isTemporalMode -> temporalStartLine + virtualRow
+                                                else -> virtualRow
+                                            }
+                                            val layout = textLayoutResults[rowIndex]?.takeIf {
+                                                it.first == virtualRow && it.second == physicalLine
+                                            }?.third
+                                            val character = if (layout != null) {
+                                                layout.getOffsetForPosition(Offset(x, rowHeightPx / 2f))
+                                            } else {
+                                                (x / dynamicCharWidthPx).toInt().coerceIn(0, ViewportState.MAX_SHAPED_CHARS)
+                                            }
+                                            return TextPosition(virtualRow, character)
+                                        }
+
+                                        val anchor = updateSelectionEndpoint()
+                                        val clickCount = clicks.press(
+                                            down.uptimeMillis, down.position.x, down.position.y, anchor.lineIndex,
+                                            viewConfiguration.doubleTapTimeoutMillis.toLong(), viewConfiguration.touchSlop
+                                        )
+                                        val unit = when (clickCount) {
+                                            2 -> ClickUnit.WORD
+                                            3 -> ClickUnit.LINE
+                                            else -> ClickUnit.CHARACTER
+                                        }
+                                        var cachedTextRow = -1L
+                                        var cachedText = ""
+                                        fun displayedTextAt(virtualRow: Long): String {
+                                            if (virtualRow != cachedTextRow) {
+                                                val physicalLine = when {
+                                                    isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRow)
+                                                    isTemporalMode -> temporalStartLine + virtualRow
+                                                    else -> virtualRow
+                                                }
+                                                cachedText = if (physicalLine >= 0L) {
+                                                    if (isFilteredMode && filteredView != null) {
+                                                        filteredView.getVirtualLineText(virtualRow, ViewportState.MAX_SHAPED_CHARS)
+                                                    } else session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
+                                                } else ""
+                                                cachedTextRow = virtualRow
+                                            }
+                                            return cachedText
+                                        }
+                                        val span = if (unit != ClickUnit.CHARACTER) {
+                                            clickSpan(displayedTextAt(anchor.lineIndex), anchor.charOffset, unit)
+                                        } else null
+                                        val initialStart = if (span != null) TextPosition(anchor.lineIndex, span.start) else anchor
+                                        val initialEnd = if (span != null) TextPosition(anchor.lineIndex, span.endExclusive) else anchor
+                                        tab.selectionState.startPosition = initialStart
+                                        tab.selectionState.endPosition = initialEnd
+                                        tab.selectionState.isDraggingSelection = true
+                                        down.consume()
+
+                                        fun refreshSelection() {
+                                            val target = updateSelectionEndpoint()
+                                            if (span != null) {
+                                                val (start, end) = extendClickSelection(
+                                                    anchor.lineIndex, span, target, displayedTextAt(target.lineIndex), unit
+                                                )
+                                                tab.selectionState.startPosition = start
+                                                tab.selectionState.endPosition = end
+                                            } else {
+                                                tab.selectionState.endPosition = target
+                                            }
+                                        }
+
+                                        val scrollJob = coroutineScope.launch {
+                                            var lastFrameNanos = withFrameNanos { it }
+                                            while (isActive && tab.selectionState.isDraggingSelection) {
+                                                val frameNanos = withFrameNanos { it }
+                                                val elapsedSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
+                                                lastFrameNanos = frameNanos
+                                                if (pointerPosition.x >= 0f &&
+                                                    (pointerPosition.x <= viewportWidthPx ||
+                                                        !SettingsManager.currentSettings.isMinimapEnabled && pointerPosition.x <= viewportWidthPx + 48f)) {
+                                                    val horizontalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.x, viewportWidthPx)
+                                                    val verticalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.y, viewportHeightPx)
+                                                    val horizontalTarget = SelectionEdgeScroll.clampHorizontal(
+                                                        horizontalScrollState.value.toFloat(), horizontalVelocity * elapsedSeconds,
+                                                        horizontalScrollState.maxValue
+                                                    )
+                                                    if (horizontalVelocity != 0f) {
+                                                        horizontalScrollState.scrollBy(horizontalTarget - horizontalScrollState.value)
+                                                    }
+                                                    if (verticalVelocity != 0f) {
+                                                        val (newTop, newOffset) = SelectionEdgeScroll.advanceVertical(
+                                                            tab.topVisibleLine, tab.subLineScrollOffsetPx, verticalVelocity * elapsedSeconds,
+                                                            rowHeightPx, totalLinesCount, visibleRowCount
+                                                        )
+                                                        tab.topVisibleLine = newTop
+                                                        tab.subLineScrollOffsetPx = newOffset
+                                                    }
+                                                }
+                                                refreshSelection()
+                                            }
+                                        }
+                                        var moved = false
+                                        var released = false
+                                        try {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull() ?: break
+                                                if (!change.pressed) {
+                                                    released = true
+                                                    break
+                                                }
+                                                if (kotlin.math.abs(change.position.x - down.position.x) > viewConfiguration.touchSlop ||
+                                                    kotlin.math.abs(change.position.y - down.position.y) > viewConfiguration.touchSlop) moved = true
+                                                pointerPosition = change.position
+                                                refreshSelection()
+                                                if (tab.selectionState.startPosition != initialStart ||
+                                                    tab.selectionState.endPosition != initialEnd) moved = true
+                                                if (event.type != PointerEventType.Scroll) change.consume()
+                                            }
+                                        } finally {
+                                            if (moved || !released || tab.selectionState.startPosition != initialStart ||
+                                                tab.selectionState.endPosition != initialEnd) clicks.cancel()
+                                            tab.selectionState.isDraggingSelection = false
+                                            scrollJob.cancel()
+                                        }
+                                    } else {
+                                        clicks.cancel()
+                                    }
+                                }
+                            }
                     ) {
                         Box(
                             modifier = Modifier
@@ -483,56 +631,11 @@ fun LogViewportCanvas(
                                 modifier = Modifier
                                     .widthIn(min = stableMinWidthDp)
                                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                                    .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)))
-                                    .pointerInput(tab, renderRowCount, fonts.editorFontSizePt, fonts.lineHeightMultiplier) {
-                                        awaitEachGesture {
-                                            val down = awaitFirstDown(requireUnconsumed = false)
-                                            val paddingStartPx = with(density) { 8.dp.toPx() }
-                                            val localX = (down.position.x - paddingStartPx).coerceAtLeast(0f)
-                                            val adjustedY = down.position.y + tab.subLineScrollOffsetPx
-                                            val clickRow = (adjustedY / rowHeightPx).toInt().coerceIn(0, renderRowCount - 1)
-                                            val clickLine = (tab.topVisibleLine + clickRow).coerceIn(0L, max(0L, totalLinesCount - 1L))
-
-                                            val layout = textLayoutResults[clickRow]
-                                            val clickChar = if (layout != null) {
-                                                layout.getOffsetForPosition(Offset(localX, rowHeightPx / 2f))
-                                            } else {
-                                                (localX / dynamicCharWidthPx).toInt()
-                                            }
-
-                                            tab.selectionState.startPosition = TextPosition(clickLine, clickChar)
-                                            tab.selectionState.endPosition = TextPosition(clickLine, clickChar)
-                                            tab.selectionState.isDraggingSelection = true
-                                            down.consume()
-
-                                            while (true) {
-                                                val event = awaitPointerEvent()
-                                                val change = event.changes.firstOrNull() ?: break
-                                                if (!change.pressed) {
-                                                    tab.selectionState.isDraggingSelection = false
-                                                    break
-                                                }
-                                                change.consume()
-                                                val dragLocalX = (change.position.x - paddingStartPx).coerceAtLeast(0f)
-                                                val dragAdjustedY = change.position.y + tab.subLineScrollOffsetPx
-                                                val dragRow = (dragAdjustedY / rowHeightPx).toInt().coerceIn(0, renderRowCount - 1)
-                                                val dragLine = (tab.topVisibleLine + dragRow).coerceIn(0L, max(0L, totalLinesCount - 1L))
-
-                                                val dragLayout = textLayoutResults[dragRow]
-                                                val dragChar = if (dragLayout != null) {
-                                                    dragLayout.getOffsetForPosition(Offset(dragLocalX, rowHeightPx / 2f))
-                                                } else {
-                                                    (dragLocalX / dynamicCharWidthPx).toInt()
-                                                }
-                                                tab.selectionState.endPosition = TextPosition(dragLine, dragChar)
-                                            }
-                                        }
-                                    }
                                     .padding(start = 8.dp)
                                     .graphicsLayer { translationY = -tab.subLineScrollOffsetPx }
                             ) {
                                 for (rowIndex in 0 until renderRowCount) {
-                                    val virtualRowIndex = tab.topVisibleLine + rowIndex
+                                    val virtualRowIndex = SelectionEdgeScroll.virtualRowAt(tab.topVisibleLine, rowIndex, totalLinesCount)
                                     val physicalLine = if (virtualRowIndex < totalLinesCount) {
                                         when {
                                             isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRowIndex)
@@ -569,8 +672,32 @@ fun LogViewportCanvas(
                                         else -> Color.Transparent
                                     }
 
-                                    val baseAnnotatedLine = remember(rawLineText, searchNeedles, isMatch, isActiveMatch, colors) {
-                                        buildHighlightedLine(rawLineText, searchNeedles, isMatch, isActiveMatch, colors)
+                                    val activeMatchCol = if (isActiveMatch) tab.selectedMatchColumn else -1
+                                    val isMatchCase = tab?.isSearchMatchCase ?: false
+                                    val isWholeWord = tab?.isSearchWholeWord ?: false
+                                    val isRegex = tab?.isSearchRegex ?: false
+                                    val baseAnnotatedLine = remember(
+                                        rawLineText,
+                                        searchNeedles,
+                                        isMatch,
+                                        isActiveMatch,
+                                        activeMatchCol,
+                                        isMatchCase,
+                                        isWholeWord,
+                                        isRegex,
+                                        colors
+                                    ) {
+                                        buildHighlightedLine(
+                                            rawLineText,
+                                            searchNeedles,
+                                            isMatch,
+                                            isActiveMatch,
+                                            activeMatchCol,
+                                            isMatchCase,
+                                            isWholeWord,
+                                            isRegex,
+                                            colors
+                                        )
                                     }
                                     val selectedRange = tab.selectionState.getSelectedRangeForLine(virtualRowIndex, rawLineText.length)
                                     val annotatedLine = if (selectedRange != null) {
@@ -605,7 +732,7 @@ fun LogViewportCanvas(
                                             maxLines = 1,
                                             softWrap = false,
                                             onTextLayout = { layoutResult ->
-                                                textLayoutResults[rowIndex] = layoutResult
+                                                textLayoutResults[rowIndex] = Triple(virtualRowIndex, physicalLine, layoutResult)
                                                 // Ratchet: grow the max observed width but never shrink it.
                                                 // Using layoutResult.size.width captures the full unsoftWrapped
                                                 // pixel extent of the line, which matches what the scroll canvas

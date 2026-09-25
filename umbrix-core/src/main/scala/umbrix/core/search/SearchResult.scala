@@ -31,6 +31,25 @@ case class SearchResult(
   def nonEmpty: Boolean = !matchingLines.isEmpty
 
   /**
+   * Constrains this search result to an inclusive range of physical lines [startLine, endLine].
+   *
+   * Executes via fast Roaring64NavigableMap bitwise range intersection without materializing line objects.
+   */
+  def constrainToRange(startLine: Long, endLine: Long): SearchResult = {
+    if (matchingLines.isEmpty || startLine > endLine) {
+      copy(matchingLines = new Roaring64NavigableMap(), totalMatches = 0L)
+    } else {
+      val boundedBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+      boundedBitmap.addRange(startLine, endLine + 1L)
+      boundedBitmap.and(matchingLines)
+      copy(
+        matchingLines = boundedBitmap,
+        totalMatches = boundedBitmap.getLongCardinality
+      )
+    }
+  }
+
+  /**
    * Finds the first matching physical line index at or after `startLine` (Forward search).
    *
    * Executes in sub-microsecond O(log M) time via Roaring64NavigableMap branchless rank-select trees.

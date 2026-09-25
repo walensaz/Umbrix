@@ -34,125 +34,288 @@ import umbrix.ui.util.formatEpochMicros
 import umbrix.ui.util.formatNumberWithCommas
 import kotlin.math.max
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.onPointerEvent
+import org.jetbrains.jewel.ui.component.Tooltip
+import umbrix.ui.menu.UmbrixDropdownMenu
+import umbrix.ui.settings.SettingsManager
+
 /**
  * Bottom workstation status bar displaying telemetry, viewport metrics, and coordinate positions.
- * Periodically polls runtime memory on a 1-second interval to display live JVM heap metrics.
+ *
+ * Features:
+ * - Left: Active indexing progress bar or resting status message.
+ * - Center: Dedicated Anomaly navigation pill with keyboard shortcuts (Shift+F4 / F4).
+ * - Right: Clean, uncluttered document telemetry (position, line count, size).
+ * - Right-Click Menu: Allows the operator to toggle visibility of any status bar section.
  */
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun BottomStatusBar(
     statusMessage: String,
     activeSession: LogSession?,
     topVisibleLine: Long,
-    activeTab: WorkspaceTab? = null
+    activeTab: WorkspaceTab? = null,
+    onNavigateNextAnomaly: () -> Unit = {},
+    onNavigatePrevAnomaly: () -> Unit = {}
 ) {
     var jvmHeapUsedBytes by remember {
         val runtime = Runtime.getRuntime()
         mutableStateOf(runtime.totalMemory() - runtime.freeMemory())
     }
+    var isContextMenuOpen by remember { mutableStateOf(false) }
+    val settings = SettingsManager.currentSettings
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000L)
-            val runtime = Runtime.getRuntime()
-            jvmHeapUsedBytes = runtime.totalMemory() - runtime.freeMemory()
+    LaunchedEffect(settings.statusBarShowMemory) {
+        if (settings.statusBarShowMemory) {
+            while (true) {
+                delay(1000L)
+                val runtime = Runtime.getRuntime()
+                jvmHeapUsedBytes = runtime.totalMemory() - runtime.freeMemory()
+            }
         }
     }
 
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(26.dp)
             .background(UmbrixTheme.colors.surfaceGutter)
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .onPointerEvent(PointerEventType.Press) { event ->
+                if (event.buttons.isSecondaryPressed) {
+                    isContextMenuOpen = true
+                }
+            }
     ) {
-        if (activeTab != null && activeTab.isIndexing) {
-            // --- Active Progressive Indexing Indicator (SIMD Tier 1 + Semantic Tier 2) ---
-            Text(
-                text = activeTab.indexingStatus,
-                fontSize = 11.sp,
-                color = UmbrixTheme.colors.progressText,
-                fontWeight = FontWeight.Medium
-            )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // --- Left: Indexing Progress or Status Message ---
+            if (activeTab != null && activeTab.isIndexing) {
+                Text(
+                    text = activeTab.indexingStatus,
+                    fontSize = 11.sp,
+                    color = UmbrixTheme.colors.progressText,
+                    fontWeight = FontWeight.Medium
+                )
 
-            Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
-            // Sleek JetBrains-style linear progress bar
-            Box(
-                modifier = Modifier
-                    .width(140.dp)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(UmbrixTheme.colors.surfaceElevated)
-            ) {
-                val progressFraction = (activeTab.indexingProgress / 100.0).toFloat().coerceIn(0f, 1f)
                 Box(
                     modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(progressFraction)
-                        .background(
-                            Brush.horizontalGradient(
-                                listOf(UmbrixTheme.colors.progressGradientStart, UmbrixTheme.colors.progressGradientEnd)
+                        .width(140.dp)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(UmbrixTheme.colors.surfaceElevated)
+                ) {
+                    val progressFraction = (activeTab.indexingProgress / 100.0).toFloat().coerceIn(0f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progressFraction)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(UmbrixTheme.colors.progressGradientStart, UmbrixTheme.colors.progressGradientEnd)
+                                )
                             )
-                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                Text(
+                    text = "${activeTab.indexingProgress.toInt()}%",
+                    fontSize = 10.sp,
+                    color = UmbrixTheme.colors.progressText,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Text(
+                    text = statusMessage,
+                    fontSize = 11.sp,
+                    color = UmbrixTheme.colors.textMuted
                 )
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.weight(1f))
+
+            // --- Center: Anomaly Navigation Pill ---
+            if (activeSession != null) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(UmbrixTheme.colors.surfaceElevated)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⚡ Anomalies:",
+                        fontSize = 10.sp,
+                        color = UmbrixTheme.colors.textSecondary,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Tooltip(
+                        tooltip = {
+                            Text("Jump to previous error or warning line (Shift+F4)")
+                        }
+                    ) {
+                        Text(
+                            text = "▲ Prev (Shift+F4)",
+                            fontSize = 10.sp,
+                            color = UmbrixTheme.colors.accentPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clickable(onClick = onNavigatePrevAnomaly)
+                                .padding(horizontal = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Tooltip(
+                        tooltip = {
+                            Text("Jump to next error or warning line (F4)")
+                        }
+                    ) {
+                        Text(
+                            text = "▼ Next (F4)",
+                            fontSize = 10.sp,
+                            color = UmbrixTheme.colors.accentPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .clickable(onClick = onNavigateNextAnomaly)
+                                .padding(horizontal = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // --- Right: Configurable Document Telemetry ---
+            val statusItems = mutableListOf<String>()
+
+            if (settings.statusBarShowPosition) {
+                val positionText = if (activeTab?.selectedLineIndex != null) {
+                    "Line ${formatNumberWithCommas(activeTab.selectedLineIndex!! + 1L)}"
+                } else {
+                    "Line ${formatNumberWithCommas(topVisibleLine + 1L)}"
+                }
+                statusItems.add(positionText)
+            }
+
+            if (settings.statusBarShowDocumentStats && activeSession != null) {
+                statusItems.add("${formatNumberWithCommas(activeSession.totalLines())} lines")
+                statusItems.add(formatByteSize(activeSession.fileSizeBytes()))
+            }
+
+            if (settings.statusBarShowMode) {
+                when {
+                    activeTab?.isFilteredView == true -> {
+                        statusItems.add("Filtered (${formatNumberWithCommas(activeTab.searchResult?.totalMatches() ?: 0L)} matches)")
+                    }
+                    activeTab?.isTemporalFocusActive == true -> {
+                        val count = max(0L, activeTab.temporalFocusEndLine - activeTab.temporalFocusStartLine + 1L)
+                        statusItems.add("Temporal Focus (${formatNumberWithCommas(count)} lines)")
+                    }
+                }
+            }
+
+            if (settings.statusBarShowIndexingDetails && activeSession != null) {
+                statusItems.add("${activeSession.simdVectorWidth() * 8}-bit SIMD")
+                statusItems.add("Index ${activeSession.indexingDurationMs()}ms")
+            }
+
+            if (settings.statusBarShowMemory) {
+                statusItems.add("Heap: ${formatByteSize(jvmHeapUsedBytes)}")
+            }
 
             Text(
-                text = "${activeTab.indexingProgress.toInt()}%",
-                fontSize = 10.sp,
-                color = UmbrixTheme.colors.progressText,
-                fontWeight = FontWeight.Bold
-            )
-        } else {
-            Text(
-                text = statusMessage,
+                text = statusItems.joinToString("  |  "),
                 fontSize = 11.sp,
-                color = UmbrixTheme.colors.textMuted
+                color = UmbrixTheme.colors.textDimmed,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
-        Spacer(modifier = Modifier.weight(1f))
-
-        val positionLabel = if (activeTab?.selectedLineIndex != null) {
-            "Line ${formatNumberWithCommas(activeTab.selectedLineIndex!! + 1L)}"
-        } else {
-            "Line ${formatNumberWithCommas(topVisibleLine + 1L)}"
+        // --- Right-Click Customization Context Menu ---
+        UmbrixDropdownMenu(
+            expanded = isContextMenuOpen,
+            onDismissRequest = { isContextMenuOpen = false }
+        ) {
+            StatusBarContextMenuItem(
+                label = "Line Position",
+                checked = settings.statusBarShowPosition,
+                onToggle = {
+                    SettingsManager.updateSettings(settings.copy(statusBarShowPosition = !settings.statusBarShowPosition))
+                }
+            )
+            StatusBarContextMenuItem(
+                label = "Document Size & Lines",
+                checked = settings.statusBarShowDocumentStats,
+                onToggle = {
+                    SettingsManager.updateSettings(settings.copy(statusBarShowDocumentStats = !settings.statusBarShowDocumentStats))
+                }
+            )
+            StatusBarContextMenuItem(
+                label = "Mode Indicator",
+                checked = settings.statusBarShowMode,
+                onToggle = {
+                    SettingsManager.updateSettings(settings.copy(statusBarShowMode = !settings.statusBarShowMode))
+                }
+            )
+            StatusBarContextMenuItem(
+                label = "Indexing & SIMD Telemetry",
+                checked = settings.statusBarShowIndexingDetails,
+                onToggle = {
+                    SettingsManager.updateSettings(settings.copy(statusBarShowIndexingDetails = !settings.statusBarShowIndexingDetails))
+                }
+            )
+            StatusBarContextMenuItem(
+                label = "JVM Heap Memory",
+                checked = settings.statusBarShowMemory,
+                onToggle = {
+                    SettingsManager.updateSettings(settings.copy(statusBarShowMemory = !settings.statusBarShowMemory))
+                }
+            )
         }
+    }
+}
 
-        val modeLabel = when {
-            activeTab?.isFilteredView == true -> {
-                "Mode: Filtered View (${formatNumberWithCommas(activeTab.searchResult?.totalMatches() ?: 0L)} matches)"
-            }
-            activeTab?.isTemporalFocusActive == true -> {
-                val spanMicros = activeTab.temporalFocusEndMicros - activeTab.temporalFocusStartMicros
-                val showDate = spanMicros >= 86_400_000_000L ||
-                    (activeTab.temporalFocusStartMicros / 86_400_000_000L != activeTab.temporalFocusEndMicros / 86_400_000_000L)
-                val startStr = formatEpochMicros(activeTab.temporalFocusStartMicros, includeDate = showDate)
-                val endStr = formatEpochMicros(activeTab.temporalFocusEndMicros, includeDate = showDate)
-                val count = max(0L, activeTab.temporalFocusEndLine - activeTab.temporalFocusStartLine + 1L)
-                "Mode: Temporal Focus ($startStr – $endStr, ${formatNumberWithCommas(count)} lines)"
-            }
-            else -> {
-                "Mode: Compact Stream (60-120 FPS)"
-            }
+@Composable
+private fun StatusBarContextMenuItem(
+    label: String,
+    checked: Boolean,
+    onToggle: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (checked) "✓" else "  ",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (checked) UmbrixTheme.colors.accentPrimary else Color.Transparent
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                color = UmbrixTheme.colors.textPrimary
+            )
         }
-
-        val documentLabel = activeSession?.let { session ->
-            "Index ${session.indexingDurationMs()} ms | ${formatNumberWithCommas(session.totalLines())} lines | " +
-                "${formatByteSize(session.fileSizeBytes())} | ${session.simdVectorWidth() * 8}-bit SIMD"
-        }
-        val memoryLabel = "JVM Heap: ${formatByteSize(jvmHeapUsedBytes)} | 0 bytes log data on GC heap"
-        val statusDetails = listOfNotNull(positionLabel, modeLabel, documentLabel, memoryLabel).joinToString(" | ")
-
-        Text(
-            text = statusDetails,
-            fontSize = 11.sp,
-            color = UmbrixTheme.colors.textDimmed,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }

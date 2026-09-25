@@ -3,9 +3,8 @@ package umbrix.ui.selection
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import umbrix.core.session.LogSession
-import kotlin.math.max
-import kotlin.math.min
+
+class SelectionTooLargeException : IllegalArgumentException("Selection exceeds the clipboard safety limit")
 
 /**
  * Coordinate position identifying a specific character in the document.
@@ -69,41 +68,28 @@ class TextSelectionState {
         }
     }
 
-    /**
-     * Extracts and slices the exact selected snippet across lines directly from the log session.
-     */
-    fun extractSelectedText(session: LogSession, maxCharsPerLine: Int = 4096): String {
+    /** Reads displayed rows only on an explicit copy request; rejects unbounded clipboard allocations. */
+    fun extractSelectedText(
+        virtualLineCount: Long,
+        lineTextAtVirtualIndex: (Long) -> String,
+        maxCopyChars: Int = 1_048_576
+    ): String {
         val (start, end) = normalizedRange() ?: return ""
-        if (start.lineIndex == end.lineIndex) {
-            val lineText = session.getLineText(start.lineIndex, maxCharsPerLine)
-            val clampedStart = start.charOffset.coerceIn(0, lineText.length)
-            val clampedEnd = end.charOffset.coerceIn(0, lineText.length)
-            return if (clampedStart < clampedEnd) lineText.substring(clampedStart, clampedEnd) else ""
-        }
-
+        if (start.lineIndex < 0L || end.lineIndex >= virtualLineCount) return ""
+        if (end.lineIndex - start.lineIndex >= 8192L) throw SelectionTooLargeException()
         val builder = StringBuilder()
-        val totalLines = session.totalLines()
-        val lineLimit = min(end.lineIndex, totalLines - 1L)
-
-        var currentLine = start.lineIndex
-        while (currentLine <= lineLimit) {
-            val lineText = session.getLineText(currentLine, maxCharsPerLine)
-            if (currentLine == start.lineIndex) {
-                val clampedStart = start.charOffset.coerceIn(0, lineText.length)
-                builder.append(lineText.substring(clampedStart))
-            } else if (currentLine == end.lineIndex) {
-                val clampedEnd = end.charOffset.coerceIn(0, lineText.length)
-                builder.append(lineText.substring(0, clampedEnd))
-            } else {
-                builder.append(lineText)
-            }
-
-            if (currentLine < end.lineIndex) {
-                builder.append('\n')
-            }
-            currentLine += 1L
+        var virtualRow = start.lineIndex
+        while (virtualRow <= end.lineIndex) {
+            val lineText = lineTextAtVirtualIndex(virtualRow)
+            val firstChar = if (virtualRow == start.lineIndex) start.charOffset.coerceIn(0, lineText.length) else 0
+            val lastChar = if (virtualRow == end.lineIndex) end.charOffset.coerceIn(0, lineText.length) else lineText.length
+            val length = (lastChar - firstChar).coerceAtLeast(0)
+            val newline = if (virtualRow < end.lineIndex) 1 else 0
+            if (length.toLong() + newline + builder.length > maxCopyChars) throw SelectionTooLargeException()
+            builder.append(lineText, firstChar, firstChar + length)
+            if (newline != 0) builder.append('\n')
+            virtualRow++
         }
-
         return builder.toString()
     }
 }

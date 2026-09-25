@@ -35,6 +35,85 @@ class HighlightCacheTest {
     }
 
     @Test
+    fun testFindNeedleIntervalsFindsMultipleInstancesOnSameLine() {
+        val text = "ERROR first error and second ERROR in line"
+        val needles = listOf("ERROR")
+        val intervals = findNeedleIntervals(text, needles)
+
+        // Case-insensitive search finds "ERROR", "error", and "ERROR"
+        assertEquals(3, intervals.size)
+        assertEquals(Pair(0, 5), intervals[0])
+        assertEquals(Pair(12, 17), intervals[1])
+        assertEquals(Pair(29, 34), intervals[2])
+    }
+
+    @Test
+    fun testFindNeedleIntervalsCaseSensitive() {
+        val text = "ERROR first error and second ERROR in line"
+        val needles = listOf("ERROR")
+        val intervals = findNeedleIntervals(text, needles, isMatchCase = true)
+
+        // Case-sensitive search only finds "ERROR" uppercase
+        assertEquals(2, intervals.size)
+        assertEquals(Pair(0, 5), intervals[0])
+        assertEquals(Pair(29, 34), intervals[1])
+    }
+
+    @Test
+    fun testFindNeedleIntervalsWholeWord() {
+        val text = "err ERROR error ERRORS error_code ERROR"
+        val needles = listOf("ERROR")
+        val intervals = findNeedleIntervals(text, needles, isMatchCase = false, isWholeWord = true)
+
+        // Whole word matches only standalone "ERROR" or "error" bounded by word boundaries
+        // "err", "ERRORS", and "error_code" are excluded
+        assertEquals(3, intervals.size)
+        assertEquals(Pair(4, 9), intervals[0])
+        assertEquals(Pair(10, 15), intervals[1])
+        assertEquals(Pair(34, 39), intervals[2])
+    }
+
+    @Test
+    fun testFindNeedleIntervalsRegex() {
+        val text = "2026-09-24 [ERROR] connection refused, code 404"
+        val needles = listOf("code\\s+\\d+")
+        val intervals = findNeedleIntervals(text, needles, isMatchCase = false, isWholeWord = false, isRegex = true)
+
+        assertEquals(1, intervals.size)
+        assertEquals(Pair(39, 47), intervals[0])
+        assertEquals("code 404", text.substring(intervals[0].first, intervals[0].second))
+    }
+
+    @Test
+    fun testHighlightCacheDifferentiatesModes() {
+        HighlightCache.clear()
+        val text = "ERROR error"
+        val needles = listOf("ERROR")
+
+        val caseInsensitive = buildHighlightedLine(text, needles, isMatch = true, isMatchCase = false)
+        val caseSensitive = buildHighlightedLine(text, needles, isMatch = true, isMatchCase = true)
+        val wholeWord = buildHighlightedLine(text, needles, isMatch = true, isWholeWord = true)
+        val regex = buildHighlightedLine(text, needles, isMatch = true, isRegex = true)
+
+        assertNotSame(caseInsensitive, caseSensitive)
+        assertNotSame(caseInsensitive, wholeWord)
+        assertNotSame(caseInsensitive, regex)
+    }
+
+    @Test
+    fun testHighlightCacheDifferentiatesActiveMatchColumn() {
+        HighlightCache.clear()
+        val text = "ERROR first error and second ERROR in line"
+        val needles = listOf("ERROR")
+
+        val matchCol0 = buildHighlightedLine(text, needles, isMatch = true, isActiveMatch = true, activeMatchColumn = 0)
+        val matchCol29 = buildHighlightedLine(text, needles, isMatch = true, isActiveMatch = true, activeMatchColumn = 29)
+
+        assertNotSame(matchCol0, matchCol29, "Different active match columns on the same line must produce distinct cached instances")
+        assertEquals(2, HighlightCache.size())
+    }
+
+    @Test
     fun testHighlightCacheBoundedEviction() {
         HighlightCache.clear()
         val needles = listOf("TEST")

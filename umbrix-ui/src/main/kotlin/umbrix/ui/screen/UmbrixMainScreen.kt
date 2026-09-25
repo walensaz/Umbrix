@@ -43,13 +43,19 @@ import umbrix.core.parser.QueryParseError
 import umbrix.core.search.SearchResult
 import umbrix.core.session.LogSession
 import umbrix.ui.components.ForensicErrorBanner
+import umbrix.ui.dialog.AboutDialog
+import umbrix.ui.dialog.ExportSubFileDialog
 import umbrix.ui.dialog.GoToLineDialog
 import umbrix.ui.dialog.GoToTimestampDialog
+import umbrix.ui.dialog.KeyboardShortcutsDialog
 import umbrix.ui.dialog.SettingsDialog
 import umbrix.ui.error.WorkstationErrorHandler
 import umbrix.ui.menu.MenuAction
 import umbrix.ui.menu.MenuSettingsReducer
 import umbrix.ui.search.SearchBar
+import umbrix.ui.search.extractSearchNeedles
+import umbrix.ui.search.findNeedleIntervals
+import umbrix.ui.selection.SelectionTooLargeException
 import umbrix.ui.settings.SettingsManager
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.state.WorkstationKeyDispatcher
@@ -109,6 +115,9 @@ fun UmbrixMainScreen(
     var searchFocusTrigger by remember { mutableStateOf(0) }
     var searchErrorMessage by remember { mutableStateOf<String?>(null) }
     var isGoToLineDialogVisible by remember { mutableStateOf(false) }
+    var isAboutDialogVisible by remember { mutableStateOf(false) }
+    var isShortcutsDialogVisible by remember { mutableStateOf(false) }
+    var isExportDialogVisible by remember { mutableStateOf(false) }
 
     val currentTab: WorkspaceTab? = openTabs.getOrNull(activeTabIndex)
     val activeSession: LogSession? = currentTab?.session
@@ -153,7 +162,7 @@ fun UmbrixMainScreen(
 
                 SettingsManager.recordRecentFile(targetFile.absolutePath)
                 val formattedSize = formatByteSize(newSession.fileSizeBytes())
-                val initialLines = formatNumberWithCommas(newSession.totalLines())
+                val initialLines = formatNumberWithCommas((newSession.totalLines() as Number).toLong())
                 statusMessageText = "Opened ${targetFile.name} ($formattedSize, $initialLines initial lines preview) in ${newSession.indexingDurationMs()} ms"
 
                 // Launch non-blocking background progress monitor for physical SIMD + semantic Tier 2 indexing
@@ -166,14 +175,14 @@ fun UmbrixMainScreen(
                                 withContext(Dispatchers.Main) {
                                     newTab.indexingProgress = newSession.indexingProgressPercent()
                                     newTab.indexingStatus = newSession.indexingStatusText()
-                                    newTab.liveTotalLines = newSession.totalLines()
+                                    newTab.liveTotalLines = (newSession.totalLines() as Number).toLong()
                                 }
                             }
                             withContext(Dispatchers.Main) {
                                 newTab.indexingProgress = 100.0
                                 newTab.isIndexing = false
                                 isIndexingActive = false
-                                val finalLines = formatNumberWithCommas(newSession.totalLines())
+                                val finalLines = formatNumberWithCommas((newSession.totalLines() as Number).toLong())
                                 val eventsFormatted = formatNumberWithCommas(newSession.totalEvents())
                                 statusMessageText = "Ready — ${targetFile.name} ($formattedSize, $finalLines lines, $eventsFormatted logical events)"
                             }
@@ -232,9 +241,26 @@ fun UmbrixMainScreen(
         if (queryText.isBlank()) {
             tab.searchResult = null
             tab.isFilteredView = false
+            tab.selectedMatchColumn = -1
             searchErrorMessage = null
             tab.session.trimWorkingSet()
             return
+        }
+
+        val effectiveQuery = when {
+            tab.isSearchRegex -> {
+                val flags = if (tab.isSearchMatchCase) "" else "(?i)"
+                val pattern = if (tab.isSearchWholeWord) "\\b(?:$queryText)\\b" else queryText
+                "regex:$flags$pattern"
+            }
+            tab.isSearchWholeWord -> {
+                val flags = if (tab.isSearchMatchCase) "" else "(?i)"
+                "regex:$flags\\b" + com.google.re2j.Pattern.quote(queryText) + "\\b"
+            }
+            tab.isSearchMatchCase -> {
+                "case:sensitive \"${queryText.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+            }
+            else -> queryText
         }
 
         tab.searchJob = coroutineScope.launch {
@@ -246,22 +272,57 @@ fun UmbrixMainScreen(
                 var hasJumpedToFirstMatch = false
 
                 val parseAndSearchResult: scala.util.Either<QueryParseError, SearchResult> = withContext(Dispatchers.Default) {
-                    tab.session.searchProgressive(queryText) { partialResult: SearchResult ->
+                    tab.session.searchProgressive(effectiveQuery) { rawPartialResult: SearchResult ->
                         if (tab.searchQuery == queryText) {
+                            val partialResult = if (tab.isTemporalFocusActive) {
+                                rawPartialResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
+                            } else {
+                                rawPartialResult
+                            }
                             tab.searchResult = partialResult
+
                             if (!hasJumpedToFirstMatch && !partialResult.isEmpty()) {
-                                val firstLine = partialResult.findNextLine(0L)
-                                if (firstLine >= 0L) {
+                                val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                                val firstLine = partialResult.findNextLine(minLine)
+                                if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
                                     hasJumpedToFirstMatch = true
+                                    val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                     if (tab.isFilteredView) {
+                                        val filteredView = tab.session.createFilteredView(partialResult.matchingLines())
+                                        val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                        val intervals = findNeedleIntervals(
+                                            lineText,
+                                            needles,
+                                            isMatchCase = tab.isSearchMatchCase,
+                                            isWholeWord = tab.isSearchWholeWord,
+                                            isRegex = tab.isSearchRegex
+                                        )
                                         tab.topVisibleLine = 0L
                                         tab.selectedLineIndex = 0L
+                                        tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                        tab.searchNavigationGeneration++
                                     } else {
-                                        // Center the match in the viewport: offset topVisibleLine so the
-                                        // match row lands in the middle rather than at the top edge.
+                                        val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                        val intervals = findNeedleIntervals(
+                                            lineText,
+                                            needles,
+                                            isMatchCase = tab.isSearchMatchCase,
+                                            isWholeWord = tab.isSearchWholeWord,
+                                            isRegex = tab.isSearchRegex
+                                        )
                                         val halfVisible = (tab.visibleRowCount / 2).toLong()
-                                        tab.topVisibleLine = (firstLine - halfVisible).coerceAtLeast(0L)
+                                        if (tab.isTemporalFocusActive) {
+                                            val relativeLine = firstLine - tab.temporalFocusStartLine
+                                            val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
+                                            val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
+                                            tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
+                                        } else {
+                                            val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                            tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                        }
                                         tab.selectedLineIndex = firstLine
+                                        tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                        tab.searchNavigationGeneration++
                                     }
                                 }
                             }
@@ -276,20 +337,58 @@ fun UmbrixMainScreen(
                     { parseError: QueryParseError ->
                         searchErrorMessage = parseError.message()
                         tab.searchResult = null
+                        tab.selectedMatchColumn = -1
                     },
-                    { searchResult: SearchResult ->
+                    { rawSearchResult: SearchResult ->
                         searchErrorMessage = null
+                        val searchResult = if (tab.isTemporalFocusActive) {
+                            rawSearchResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
+                        } else {
+                            rawSearchResult
+                        }
                         tab.searchResult = searchResult
+
                         if (!hasJumpedToFirstMatch && !searchResult.isEmpty()) {
-                            val firstLine = searchResult.findNextLine(0L)
-                            if (firstLine >= 0L) {
+                            val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                            val firstLine = searchResult.findNextLine(minLine)
+                            if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
+                                val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                 if (tab.isFilteredView) {
+                                    val filteredView = tab.session.createFilteredView(searchResult.matchingLines())
+                                    val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                    val intervals = findNeedleIntervals(
+                                        lineText,
+                                        needles,
+                                        isMatchCase = tab.isSearchMatchCase,
+                                        isWholeWord = tab.isSearchWholeWord,
+                                        isRegex = tab.isSearchRegex
+                                    )
                                     tab.topVisibleLine = 0L
                                     tab.selectedLineIndex = 0L
+                                    tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                    tab.searchNavigationGeneration++
                                 } else {
+                                    val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                    val intervals = findNeedleIntervals(
+                                        lineText,
+                                        needles,
+                                        isMatchCase = tab.isSearchMatchCase,
+                                        isWholeWord = tab.isSearchWholeWord,
+                                        isRegex = tab.isSearchRegex
+                                    )
                                     val halfVisible = (tab.visibleRowCount / 2).toLong()
-                                    tab.topVisibleLine = (firstLine - halfVisible).coerceAtLeast(0L)
+                                    if (tab.isTemporalFocusActive) {
+                                        val relativeLine = firstLine - tab.temporalFocusStartLine
+                                        val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
+                                        val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
+                                        tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
+                                    } else {
+                                        val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                        tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                    }
                                     tab.selectedLineIndex = firstLine
+                                    tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                    tab.searchNavigationGeneration++
                                 }
                             }
                         }
@@ -302,7 +401,7 @@ fun UmbrixMainScreen(
                 val context = ForensicReportContext.fromSession(
                     tab.filePath,
                     tab.session.fileSizeBytes(),
-                    tab.session.totalLines(),
+                    (tab.session.totalLines() as Number).toLong(),
                     tab.topVisibleLine
                 )
                 WorkstationErrorHandler.reportException(e, context)
@@ -319,45 +418,169 @@ fun UmbrixMainScreen(
             val result = tab.searchResult ?: return
             if (result.isEmpty()) return
 
+            val needles = extractSearchNeedles(tab.searchQuery, isRegex = tab.isSearchRegex)
+            if (needles.isEmpty()) return
+
             if (tab.isFilteredView) {
                 val totalFiltered = result.totalMatches()
                 if (totalFiltered <= 0L) return
-                // In filtered mode the virtual line IS the match index — step within it.
-                val currentVirtual = tab.selectedLineIndex ?: tab.topVisibleLine
-                val targetVirtualLine = if (forward) {
-                    if (currentVirtual + 1L < totalFiltered) currentVirtual + 1L else 0L
-                } else {
-                    if (currentVirtual - 1L >= 0L) currentVirtual - 1L else totalFiltered - 1L
+                val filteredView = tab.session.createFilteredView(result.matchingLines())
+
+                fun getFilteredLineIntervals(vLine: Long): List<Pair<Int, Int>> {
+                    if (vLine < 0L || vLine >= totalFiltered) return emptyList()
+                    val lineText = try {
+                        filteredView.getVirtualLineText(vLine, ViewportState.MAX_SHAPED_CHARS)
+                    } catch (_: Exception) { "" }
+                    return findNeedleIntervals(
+                        lineText,
+                        needles,
+                        isMatchCase = tab.isSearchMatchCase,
+                        isWholeWord = tab.isSearchWholeWord,
+                        isRegex = tab.isSearchRegex
+                    )
                 }
-                tab.topVisibleLine = targetVirtualLine
-                tab.selectedLineIndex = targetVirtualLine
-                tab.subLineScrollOffsetPx = 0f
+
+                val currentVirtual = (tab.selectedLineIndex ?: tab.topVisibleLine).coerceIn(0L, totalFiltered - 1L)
+                val currentCol = tab.selectedMatchColumn
+                val currentIntervals = getFilteredLineIntervals(currentVirtual)
+
+                if (forward) {
+                    val nextInterval = if (currentCol >= 0) {
+                        currentIntervals.firstOrNull { it.first > currentCol }
+                    } else {
+                        currentIntervals.firstOrNull()
+                    }
+
+                    if (nextInterval != null) {
+                        tab.selectedMatchColumn = nextInterval.first
+                        tab.selectedLineIndex = currentVirtual
+                        tab.searchNavigationGeneration++
+                    } else {
+                        var targetVirtual = if (currentVirtual + 1L < totalFiltered) currentVirtual + 1L else 0L
+                        var targetIntervals = getFilteredLineIntervals(targetVirtual)
+                        var attempts = 0
+                        while (targetIntervals.isEmpty() && attempts < totalFiltered) {
+                            targetVirtual = if (targetVirtual + 1L < totalFiltered) targetVirtual + 1L else 0L
+                            targetIntervals = getFilteredLineIntervals(targetVirtual)
+                            attempts++
+                        }
+                        tab.topVisibleLine = targetVirtual
+                        tab.selectedLineIndex = targetVirtual
+                        tab.selectedMatchColumn = targetIntervals.firstOrNull()?.first ?: 0
+                        tab.subLineScrollOffsetPx = 0f
+                        tab.searchNavigationGeneration++
+                    }
+                } else {
+                    val prevInterval = if (currentCol >= 0) {
+                        currentIntervals.lastOrNull { it.first < currentCol }
+                    } else {
+                        null
+                    }
+
+                    if (prevInterval != null) {
+                        tab.selectedMatchColumn = prevInterval.first
+                        tab.selectedLineIndex = currentVirtual
+                        tab.searchNavigationGeneration++
+                    } else {
+                        var targetVirtual = if (currentVirtual - 1L >= 0L) currentVirtual - 1L else totalFiltered - 1L
+                        var targetIntervals = getFilteredLineIntervals(targetVirtual)
+                        var attempts = 0
+                        while (targetIntervals.isEmpty() && attempts < totalFiltered) {
+                            targetVirtual = if (targetVirtual - 1L >= 0L) targetVirtual - 1L else totalFiltered - 1L
+                            targetIntervals = getFilteredLineIntervals(targetVirtual)
+                            attempts++
+                        }
+                        tab.topVisibleLine = targetVirtual
+                        tab.selectedLineIndex = targetVirtual
+                        tab.selectedMatchColumn = targetIntervals.lastOrNull()?.first ?: 0
+                        tab.subLineScrollOffsetPx = 0f
+                        tab.searchNavigationGeneration++
+                    }
+                }
             } else {
-                // Step from the currently highlighted match line, not the scroll-top, so that
-                // navigating after a manual scroll continues from the last highlighted result.
-                val anchorLine = tab.selectedLineIndex ?: tab.topVisibleLine
-                val targetLine = if (forward) {
-                    val nextLine = result.findNextLine(anchorLine + 1L)
-                    if (nextLine >= 0L) {
-                        nextLine
+                val isTemporal = tab.isTemporalFocusActive
+                val minLine = if (isTemporal) tab.temporalFocusStartLine else 0L
+                val maxLine = if (isTemporal) tab.temporalFocusEndLine else ((tab.session.totalLines() as Number).toLong() - 1L)
+
+                fun getLineIntervals(line: Long): List<Pair<Int, Int>> {
+                    if (line < 0L || line >= (tab.session.totalLines() as Number).toLong()) return emptyList()
+                    val lineText = try {
+                        tab.session.getLineText(line, ViewportState.MAX_SHAPED_CHARS)
+                    } catch (_: Exception) { "" }
+                    return findNeedleIntervals(
+                        lineText,
+                        needles,
+                        isMatchCase = tab.isSearchMatchCase,
+                        isWholeWord = tab.isSearchWholeWord,
+                        isRegex = tab.isSearchRegex
+                    )
+                }
+
+                val anchorLine = tab.selectedLineIndex ?: if (isTemporal) (tab.temporalFocusStartLine + tab.topVisibleLine) else tab.topVisibleLine
+                val clampedAnchor = anchorLine.coerceIn(minLine, maxLine)
+                val currentCol = tab.selectedMatchColumn
+                val isAnchorMatch = result.matchingLines().contains(clampedAnchor)
+
+                fun centerOnLine(targetLine: Long, col: Int) {
+                    val halfVisible = (tab.visibleRowCount / 2).toLong()
+                    if (isTemporal) {
+                        val relativeLine = targetLine - tab.temporalFocusStartLine
+                        val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
+                        val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
+                        tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                     } else {
-                        val firstLine = result.findNextLine(0L)
-                        if (firstLine >= 0L) firstLine else anchorLine
+                        val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                        tab.topVisibleLine = (targetLine - halfVisible).coerceIn(0L, maxTop)
+                    }
+                    tab.selectedLineIndex = targetLine
+                    tab.selectedMatchColumn = col
+                    tab.subLineScrollOffsetPx = 0f
+                    tab.searchNavigationGeneration++
+                }
+
+                if (forward) {
+                    val currentIntervals = if (isAnchorMatch) getLineIntervals(clampedAnchor) else emptyList()
+                    val nextInterval = if (currentCol >= 0) {
+                        currentIntervals.firstOrNull { it.first > currentCol }
+                    } else {
+                        currentIntervals.firstOrNull()
+                    }
+
+                    if (nextInterval != null) {
+                        centerOnLine(clampedAnchor, nextInterval.first)
+                    } else {
+                        val nextLine = result.findNextLine(clampedAnchor + 1L)
+                        val targetLine = if (nextLine >= 0L && nextLine <= maxLine) {
+                            nextLine
+                        } else {
+                            val wrapLine = result.findNextLine(minLine)
+                            if (wrapLine >= 0L && wrapLine <= maxLine) wrapLine else clampedAnchor
+                        }
+                        val targetIntervals = getLineIntervals(targetLine)
+                        centerOnLine(targetLine, targetIntervals.firstOrNull()?.first ?: 0)
                     }
                 } else {
-                    val prevLine = result.findPreviousLine(anchorLine - 1L)
-                    if (prevLine >= 0L) {
-                        prevLine
+                    val currentIntervals = if (isAnchorMatch) getLineIntervals(clampedAnchor) else emptyList()
+                    val prevInterval = if (currentCol >= 0) {
+                        currentIntervals.lastOrNull { it.first < currentCol }
                     } else {
-                        val lastLine = result.findPreviousLine(tab.session.totalLines() - 1L)
-                        if (lastLine >= 0L) lastLine else anchorLine
+                        null
+                    }
+
+                    if (prevInterval != null) {
+                        centerOnLine(clampedAnchor, prevInterval.first)
+                    } else {
+                        val prevLine = result.findPreviousLine(clampedAnchor - 1L)
+                        val targetLine = if (prevLine >= minLine) {
+                            prevLine
+                        } else {
+                            val wrapLine = result.findPreviousLine(maxLine)
+                            if (wrapLine >= minLine) wrapLine else clampedAnchor
+                        }
+                        val targetIntervals = getLineIntervals(targetLine)
+                        centerOnLine(targetLine, targetIntervals.lastOrNull()?.first ?: 0)
                     }
                 }
-                // Center the viewport so the match lands in the middle of the visible area.
-                val halfVisible = (tab.visibleRowCount / 2).toLong()
-                tab.topVisibleLine = (targetLine - halfVisible).coerceAtLeast(0L)
-                tab.selectedLineIndex = targetLine
-                tab.subLineScrollOffsetPx = 0f
             }
         } catch (e: Throwable) {
             if (ForensicErrorReportGenerator.isFatal(e)) throw e
@@ -375,7 +598,7 @@ fun UmbrixMainScreen(
                 if (next >= 0L) next else session.findNextAnomaly(-1L)
             } else {
                 val prev = session.findPreviousAnomaly(currentLine)
-                if (prev >= 0L) prev else session.findPreviousAnomaly(session.totalLines())
+                if (prev >= 0L) prev else session.findPreviousAnomaly((session.totalLines() as Number).toLong())
             }
             if (targetLine >= 0L) {
                 tab.topVisibleLine = targetLine
@@ -404,7 +627,7 @@ fun UmbrixMainScreen(
                     if (tab.isFilteredView && tab.searchResult != null) {
                         tab.session.exportFilteredLines(tab.searchResult!!.matchingLines(), targetFile.toPath())
                     } else {
-                        val endLine = (tab.topVisibleLine + 1000L).coerceAtMost(tab.session.totalLines() - 1L)
+                        val endLine = (tab.topVisibleLine + 1000L).coerceAtMost((tab.session.totalLines() as Number).toLong() - 1L)
                         tab.session.exportContiguousRange(tab.topVisibleLine, endLine, targetFile.toPath())
                     }
                 }
@@ -417,7 +640,7 @@ fun UmbrixMainScreen(
                 val context = ForensicReportContext.fromSession(
                     tab.filePath,
                     tab.session.fileSizeBytes(),
-                    tab.session.totalLines(),
+                    (tab.session.totalLines() as Number).toLong(),
                     tab.topVisibleLine
                 )
                 WorkstationErrorHandler.reportException(e, context)
@@ -436,7 +659,7 @@ fun UmbrixMainScreen(
     fun generateDiagnosticReport() {
         val tab = currentTab
         val context = if (tab != null) {
-            ForensicReportContext.fromSession(tab.filePath, tab.session.fileSizeBytes(), tab.session.totalLines(), tab.topVisibleLine)
+            ForensicReportContext.fromSession(tab.filePath, tab.session.fileSizeBytes(), (tab.session.totalLines() as Number).toLong(), tab.topVisibleLine)
         } else {
             ForensicReportContext.empty()
         }
@@ -456,6 +679,13 @@ fun UmbrixMainScreen(
                 is MenuAction.OpenFile -> openFileViaNativeDialog()
                 is MenuAction.OpenRecentFile -> loadLogFile(action.path, asNewTab = true)
                 is MenuAction.ClearRecentFiles -> statusMessageText = "Cleared recent files."
+                is MenuAction.ExportSubFile -> {
+                    if (activeSession != null) {
+                        isExportDialogVisible = true
+                    } else {
+                        statusMessageText = "Open a log file to export sub-files."
+                    }
+                }
                 is MenuAction.Find -> {
                     isSearchBarVisible = true
                     searchFocusTrigger++
@@ -480,10 +710,8 @@ fun UmbrixMainScreen(
                 is MenuAction.SetTheme -> Unit
                 is MenuAction.OpenSettings -> onSetSettingsDialogVisible(true)
                 is MenuAction.DiagnosticReport -> generateDiagnosticReport()
-                is MenuAction.About -> {
-                    statusMessageText = "Umbrix — Industrial Log Workstation · JDK ${Runtime.version()} · " +
-                        "${System.getProperty("os.name")} ${System.getProperty("os.arch")}"
-                }
+                is MenuAction.KeyboardShortcuts -> isShortcutsDialogVisible = true
+                is MenuAction.About -> isAboutDialogVisible = true
                 is MenuAction.Exit -> onExitRequest()
             }
         } catch (e: Throwable) {
@@ -498,11 +726,21 @@ fun UmbrixMainScreen(
         menuActions.collect { menuAction -> latestMenuActionHandler(menuAction) }
     }
 
-    DisposableEffect(isSearchBarVisible, isGoToLineDialogVisible, isSettingsDialogVisible, currentTab, activeTabIndex) {
+    DisposableEffect(isSearchBarVisible, isGoToLineDialogVisible, isSettingsDialogVisible, isAboutDialogVisible, isShortcutsDialogVisible, isExportDialogVisible, currentTab, activeTabIndex) {
         WorkstationKeyDispatcher.onGlobalKeyEvent = { keyEvent ->
             if (keyEvent.type == KeyEventType.KeyDown) {
                 val isCtrlOrCmd = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
                 when {
+                    keyEvent.key == Key.F1 || (isCtrlOrCmd && keyEvent.key == Key.Slash) -> {
+                        isShortcutsDialogVisible = true
+                        true
+                    }
+                    isCtrlOrCmd && keyEvent.isShiftPressed && keyEvent.key == Key.S -> {
+                        if (activeSession != null) {
+                            isExportDialogVisible = true
+                            true
+                        } else false
+                    }
                     isCtrlOrCmd && keyEvent.key == Key.Comma -> {
                         onSetSettingsDialogVisible(true)
                         true
@@ -550,25 +788,36 @@ fun UmbrixMainScreen(
                         val tab = currentTab
                         if (tab != null) {
                             if (tab.selectionState.hasSelection()) {
-                                val selectedText = tab.selectionState.extractSelectedText(tab.session, ViewportState.MAX_SHAPED_CHARS)
-                                if (selectedText.isNotEmpty()) {
-                                    try {
+                                try {
+                                    val filteredView = if (tab.isFilteredView && tab.searchResult != null) {
+                                        tab.session.createFilteredView(tab.searchResult!!.matchingLines())
+                                    } else null
+                                    val temporalStart = if (filteredView == null && tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                                    val virtualLineCount = when {
+                                        filteredView != null -> filteredView.totalFilteredLines()
+                                        tab.isTemporalFocusActive -> (tab.temporalFocusEndLine - temporalStart + 1L).coerceAtLeast(0L)
+                                        else -> tab.session.totalLines()
+                                    }
+                                    val selectedText = tab.selectionState.extractSelectedText(virtualLineCount, { virtualRow ->
+                                        val physicalLine = filteredView?.physicalLineForVirtualIndex(virtualRow) ?: temporalStart + virtualRow
+                                        tab.session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
+                                    })
+                                    if (selectedText.isNotEmpty()) {
                                         val selection = StringSelection(selectedText)
                                         Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
                                         statusMessageText = "Copied ${formatNumberWithCommas(selectedText.length.toLong())} characters to clipboard."
-                                    } catch (_: Throwable) {}
+                                    }
+                                } catch (_: SelectionTooLargeException) {
+                                    statusMessageText = "Selection too large to copy (limit: 1 MiB or 8,192 rows)."
+                                } catch (_: Exception) {
+                                    statusMessageText = "Could not copy the selected log text."
                                 }
                                 true
                             } else {
                                 val selectedLine = tab.selectedLineIndex
                                 if (selectedLine != null && selectedLine >= 0L) {
                                     val lineText = try {
-                                        if (tab.isFilteredView && tab.searchResult != null) {
-                                            val filteredView = tab.session.createFilteredView(tab.searchResult!!.matchingLines())
-                                            filteredView.getVirtualLineText(selectedLine, ViewportState.MAX_SHAPED_CHARS)
-                                        } else {
-                                            tab.session.getLineText(selectedLine, ViewportState.MAX_SHAPED_CHARS)
-                                        }
+                                        tab.session.getLineText(selectedLine, ViewportState.MAX_SHAPED_CHARS)
                                     } catch (_: Exception) { "" }
 
                                     if (lineText.isNotEmpty()) {
@@ -687,6 +936,27 @@ fun UmbrixMainScreen(
                 errorMessage = searchErrorMessage,
                 focusRequester = searchFocusRequester,
                 focusTrigger = searchFocusTrigger,
+                isMatchCase = currentTab?.isSearchMatchCase ?: false,
+                onToggleMatchCase = {
+                    currentTab?.let { tab ->
+                        tab.isSearchMatchCase = !tab.isSearchMatchCase
+                        triggerSearch(tab.searchQuery, immediate = true)
+                    }
+                },
+                isWholeWord = currentTab?.isSearchWholeWord ?: false,
+                onToggleWholeWord = {
+                    currentTab?.let { tab ->
+                        tab.isSearchWholeWord = !tab.isSearchWholeWord
+                        triggerSearch(tab.searchQuery, immediate = true)
+                    }
+                },
+                isRegex = currentTab?.isSearchRegex ?: false,
+                onToggleRegex = {
+                    currentTab?.let { tab ->
+                        tab.isSearchRegex = !tab.isSearchRegex
+                        triggerSearch(tab.searchQuery, immediate = true)
+                    }
+                },
                 isFilteredView = currentTab?.isFilteredView ?: false,
                 onToggleFilterView = {
                     currentTab?.let { tab ->
@@ -696,16 +966,16 @@ fun UmbrixMainScreen(
                             if (!tab.isFilteredView) {
                                 val currentPhysical = tab.selectedLineIndex ?: tab.topVisibleLine
                                 val filteredView = session.createFilteredView(searchResult.matchingLines())
-                                val virtualIndex = filteredView.virtualIndexForPhysicalLine(currentPhysical)
-                                val totalFiltered = filteredView.totalFilteredLines()
+                                val virtualIndex = (filteredView.virtualIndexForPhysicalLine(currentPhysical) as Number).toLong()
+                                val totalFiltered = (filteredView.totalFilteredLines() as Number).toLong()
                                 tab.topVisibleLine = virtualIndex.coerceIn(0L, maxOf(0L, totalFiltered - 1L))
                                 tab.selectedLineIndex = tab.topVisibleLine
                                 tab.isFilteredView = true
                             } else {
                                 val filteredView = session.createFilteredView(searchResult.matchingLines())
                                 val currentVirtual = tab.selectedLineIndex ?: tab.topVisibleLine
-                                val physical = filteredView.physicalLineForVirtualIndex(currentVirtual)
-                                tab.topVisibleLine = physical.coerceIn(0L, maxOf(0L, session.totalLines() - 1L))
+                                val physical = (filteredView.physicalLineForVirtualIndex(currentVirtual) as Number).toLong()
+                                tab.topVisibleLine = physical.coerceIn(0L, maxOf(0L, (session.totalLines() as Number).toLong() - 1L))
                                 tab.selectedLineIndex = physical
                                 tab.isFilteredView = false
                             }
@@ -727,12 +997,6 @@ fun UmbrixMainScreen(
                     } else {
                         navigateSearch(forward = false)
                     }
-                },
-                onNavigateNextAnomaly = {
-                    navigateAnomaly(forward = true)
-                },
-                onNavigatePrevAnomaly = {
-                    navigateAnomaly(forward = false)
                 },
                 onExportSubFile = { exportSubFile() },
                 onClose = {
@@ -762,7 +1026,7 @@ fun UmbrixMainScreen(
                 },
                 onClearTrim = {
                     currentTab.isTemporalFocusActive = false
-                    statusMessageText = "Cleared temporal focus. Showing all ${formatNumberWithCommas(activeSession.totalLines())} lines."
+                    statusMessageText = "Cleared temporal focus. Showing all ${formatNumberWithCommas((activeSession.totalLines() as Number).toLong())} lines."
                 },
                 onClose = {
                     currentTab.isTimeScrubberOpen = false
@@ -787,7 +1051,9 @@ fun UmbrixMainScreen(
             statusMessage = statusMessageText,
             activeSession = activeSession,
             topVisibleLine = currentTab?.topVisibleLine ?: 0L,
-            activeTab = currentTab
+            activeTab = currentTab,
+            onNavigateNextAnomaly = { navigateAnomaly(forward = true) },
+            onNavigatePrevAnomaly = { navigateAnomaly(forward = false) }
         )
     }
 
@@ -799,7 +1065,7 @@ fun UmbrixMainScreen(
             onGoToLine = { targetLine ->
                 currentTab?.let { tab ->
                     if (tab.isTemporalFocusActive) {
-                        val clampedLine = targetLine.coerceIn(0L, maxOf(0L, activeSession.totalLines() - 1L))
+                        val clampedLine = targetLine.coerceIn(0L, maxOf(0L, (activeSession.totalLines() as Number).toLong() - 1L))
                         if (clampedLine in tab.temporalFocusStartLine..tab.temporalFocusEndLine) {
                             tab.topVisibleLine = clampedLine - tab.temporalFocusStartLine
                             tab.selectedLineIndex = clampedLine
@@ -832,6 +1098,50 @@ fun UmbrixMainScreen(
             onDismiss = {
                 onSetSettingsDialogVisible(false)
             }
+        )
+    }
+
+    // --- Standardized About Dialog ---
+    if (isAboutDialogVisible) {
+        AboutDialog(
+            onDismiss = { isAboutDialogVisible = false }
+        )
+    }
+
+    // --- Standardized Keyboard Shortcuts Cheatsheet Dialog (F1 / Ctrl+/) ---
+    if (isShortcutsDialogVisible) {
+        KeyboardShortcutsDialog(
+            onDismiss = { isShortcutsDialogVisible = false }
+        )
+    }
+
+    // --- Standardized Export Sub-File Dialog (Ctrl+Shift+S) ---
+    if (isExportDialogVisible && activeSession != null) {
+        ExportSubFileDialog(
+            session = activeSession,
+            currentLine = currentTab.selectedLineIndex ?: currentTab.topVisibleLine,
+            onExportRequested = { startLine, endLine, destinationFile, _ ->
+                coroutineScope.launch {
+                    try {
+                        statusMessageText = "Exporting sub-file to ${destinationFile.absolutePath}..."
+                        val sliceResult = withContext(Dispatchers.IO) {
+                            currentTab.session.exportContiguousRange(startLine, endLine, destinationFile.toPath())
+                        }
+                        statusMessageText = "Exported ${sliceResult.linesExported()} lines (${formatByteSize(sliceResult.bytesWritten())}) in ${sliceResult.durationNanos() / 1_000_000L} ms. Opening in new tab..."
+                        loadLogFile(destinationFile.absolutePath, asNewTab = true)
+                    } catch (e: Throwable) {
+                        if (ForensicErrorReportGenerator.isFatal(e)) throw e
+                        val context = ForensicReportContext.fromSession(
+                            currentTab.filePath,
+                            currentTab.session.fileSizeBytes(),
+                            (currentTab.session.totalLines() as Number).toLong(),
+                            currentTab.topVisibleLine
+                        )
+                        WorkstationErrorHandler.reportException(e, context)
+                    }
+                }
+            },
+            onDismiss = { isExportDialogVisible = false }
         )
     }
 }

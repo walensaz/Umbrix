@@ -28,6 +28,27 @@ class WorkspaceTab(
     var searchJob: Job? = null
 
     /**
+     * Character-column offset of the currently active match occurrence within [selectedLineIndex].
+     * -1 means the column has not yet been resolved (e.g. on a fresh search before the first
+     * navigation step). Updated by [umbrix.ui.screen.UmbrixMainScreen.navigateSearch] each time
+     * the user steps forward or backward through occurrences.
+     */
+    var selectedMatchColumn: Int by mutableStateOf(-1)
+
+    /**
+     * Monotone counter incremented only when the user explicitly navigates between search matches
+     * (Enter / F3 / ↑↓ search buttons). [umbrix.ui.viewport.LogViewportCanvas] watches this key
+     * in a LaunchedEffect to trigger the horizontal scroll-to-match animation. Manual vertical
+     * scrolling never increments this counter, so it never hijacks the horizontal scroll position.
+     */
+    var searchNavigationGeneration: Int by mutableStateOf(0)
+
+    // --- Search Modes (Sublime / IntelliJ style) ---
+    var isSearchMatchCase: Boolean by mutableStateOf(false)
+    var isSearchWholeWord: Boolean by mutableStateOf(false)
+    var isSearchRegex: Boolean by mutableStateOf(false)
+
+    /**
      * Written by LogViewportCanvas on each layout pass so that navigation logic in
      * UmbrixMainScreen can offset topVisibleLine by half this value to center matches.
      */
@@ -46,7 +67,7 @@ class WorkspaceTab(
     var indexingProgress: Double by mutableStateOf(session.indexingProgressPercent())
     var indexingStatus: String by mutableStateOf(session.indexingStatusText())
     var isIndexing: Boolean by mutableStateOf(!session.isIndexingComplete())
-    var liveTotalLines: Long by mutableStateOf(session.totalLines())
+    var liveTotalLines: Long by mutableStateOf((session.totalLines() as Number).toLong())
 
     // --- Temporal Navigation & Focus Mode ---
     var isTimeScrubberOpen: Boolean by mutableStateOf(false)

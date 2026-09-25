@@ -8,15 +8,17 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.geometry.Offset
+import com.google.re2j.Pattern
 import umbrix.ui.theme.UmbrixThemeSpec
 import umbrix.ui.theme.themes.DarkCarbonTheme
 
 /**
  * Extracts individual query search terms / needles, ignoring boolean AST operators.
  */
-fun extractSearchNeedles(query: String): List<String> {
+fun extractSearchNeedles(query: String, isRegex: Boolean = false): List<String> {
     val trimmed = query.trim()
     if (trimmed.isBlank()) return emptyList()
+    if (isRegex) return listOf(trimmed)
 
     if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length > 2) {
         return listOf(trimmed.substring(1, trimmed.length - 1))
@@ -39,6 +41,92 @@ fun extractSearchNeedles(query: String): List<String> {
 }
 
 /**
+ * Finds all character intervals for search needles within [rawText], sorted and merged.
+ * Supports exact match-case, whole-word boundaries (\b), and linear-time RE2J regular expressions.
+ */
+fun findNeedleIntervals(
+    rawText: String,
+    needles: List<String>,
+    isMatchCase: Boolean = false,
+    isWholeWord: Boolean = false,
+    isRegex: Boolean = false
+): List<Pair<Int, Int>> {
+    if (needles.isEmpty() || rawText.isEmpty()) return emptyList()
+
+    val intervals = mutableListOf<Pair<Int, Int>>()
+
+    if (isRegex) {
+        for (needle in needles) {
+            if (needle.isBlank()) continue
+            try {
+                val flags = if (isMatchCase) 0 else Pattern.CASE_INSENSITIVE
+                val regexPattern = if (isWholeWord) "\\b(?:$needle)\\b" else needle
+                val pattern = Pattern.compile(regexPattern, flags)
+                val matcher = pattern.matcher(rawText)
+                while (matcher.find()) {
+                    intervals.add(Pair(matcher.start(), matcher.end()))
+                }
+            } catch (_: Exception) {
+                // Invalid/incomplete regex while user is typing
+            }
+        }
+    } else if (isWholeWord) {
+        for (needle in needles) {
+            if (needle.isBlank()) continue
+            try {
+                val flags = if (isMatchCase) 0 else Pattern.CASE_INSENSITIVE
+                val pattern = Pattern.compile("\\b" + Pattern.quote(needle) + "\\b", flags)
+                val matcher = pattern.matcher(rawText)
+                while (matcher.find()) {
+                    intervals.add(Pair(matcher.start(), matcher.end()))
+                }
+            } catch (_: Exception) {}
+        }
+    } else if (isMatchCase) {
+        for (needle in needles) {
+            if (needle.isBlank()) continue
+            var idx = rawText.indexOf(needle, 0)
+            while (idx != -1) {
+                intervals.add(Pair(idx, idx + needle.length))
+                idx = rawText.indexOf(needle, idx + 1)
+            }
+        }
+    } else {
+        val lowerText = rawText.lowercase()
+        for (needle in needles) {
+            if (needle.isBlank()) continue
+            val lowerNeedle = needle.lowercase()
+            var idx = lowerText.indexOf(lowerNeedle, 0)
+            while (idx != -1) {
+                intervals.add(Pair(idx, idx + needle.length))
+                idx = lowerText.indexOf(lowerNeedle, idx + 1)
+            }
+        }
+    }
+
+    if (intervals.isEmpty()) {
+        return emptyList()
+    }
+
+    // Sort intervals by start offset and merge overlaps
+    intervals.sortBy { it.first }
+    val merged = mutableListOf<Pair<Int, Int>>()
+    for (interval in intervals) {
+        if (merged.isEmpty()) {
+            merged.add(interval)
+        } else {
+            val last = merged.last()
+            if (interval.first <= last.second) {
+                merged[merged.size - 1] = Pair(last.first, maxOf(last.second, interval.second))
+            } else {
+                merged.add(interval)
+            }
+        }
+    }
+    return merged
+}
+
+/**
  * High-performance bounded LRU memoization cache for styled AnnotatedString lines.
  *
  * Eliminates repetitive string lowercasing, needle extraction, interval sorting, and
@@ -52,6 +140,10 @@ object HighlightCache {
         val needlesHash: Int,
         val isMatch: Boolean,
         val isActiveMatch: Boolean,
+        val activeMatchColumn: Int,
+        val isMatchCase: Boolean,
+        val isWholeWord: Boolean,
+        val isRegex: Boolean,
         val themeName: String
     )
 
@@ -66,20 +158,44 @@ object HighlightCache {
         rawText: String,
         needles: List<String>,
         isMatch: Boolean,
-        isActiveMatch: Boolean,
+        isActiveMatch: Boolean = false,
+        activeMatchColumn: Int = -1,
+        isMatchCase: Boolean = false,
+        isWholeWord: Boolean = false,
+        isRegex: Boolean = false,
         theme: UmbrixThemeSpec = DarkCarbonTheme
     ): AnnotatedString {
         if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
             return AnnotatedString(rawText)
         }
 
-        val key = CacheKey(rawText, needles.hashCode(), isMatch, isActiveMatch, theme.name)
+        val key = CacheKey(
+            rawText,
+            needles.hashCode(),
+            isMatch,
+            isActiveMatch,
+            activeMatchColumn,
+            isMatchCase,
+            isWholeWord,
+            isRegex,
+            theme.name
+        )
         val cached = lruMap[key]
         if (cached != null) {
             return cached
         }
 
-        val built = buildHighlightedLineDirect(rawText, needles, isMatch, isActiveMatch, theme)
+        val built = buildHighlightedLineDirect(
+            rawText,
+            needles,
+            isMatch,
+            isActiveMatch,
+            activeMatchColumn,
+            isMatchCase,
+            isWholeWord,
+            isRegex,
+            theme
+        )
         lruMap[key] = built
         return built
     }
@@ -101,10 +217,24 @@ fun buildHighlightedLine(
     rawText: String,
     needles: List<String>,
     isMatch: Boolean,
-    isActiveMatch: Boolean,
+    isActiveMatch: Boolean = false,
+    activeMatchColumn: Int = -1,
+    isMatchCase: Boolean = false,
+    isWholeWord: Boolean = false,
+    isRegex: Boolean = false,
     theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
-    return HighlightCache.getOrBuild(rawText, needles, isMatch, isActiveMatch, theme)
+    return HighlightCache.getOrBuild(
+        rawText,
+        needles,
+        isMatch,
+        isActiveMatch,
+        activeMatchColumn,
+        isMatchCase,
+        isWholeWord,
+        isRegex,
+        theme
+    )
 }
 
 /**
@@ -114,64 +244,32 @@ private fun buildHighlightedLineDirect(
     rawText: String,
     needles: List<String>,
     isMatch: Boolean,
-    isActiveMatch: Boolean,
+    isActiveMatch: Boolean = false,
+    activeMatchColumn: Int = -1,
+    isMatchCase: Boolean = false,
+    isWholeWord: Boolean = false,
+    isRegex: Boolean = false,
     theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
     if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
         return AnnotatedString(rawText)
     }
 
-    val intervals = mutableListOf<Pair<Int, Int>>()
-    val lowerText = rawText.lowercase()
-
-    for (needle in needles) {
-        if (needle.isBlank()) continue
-        val lowerNeedle = needle.lowercase()
-        var idx = lowerText.indexOf(lowerNeedle, 0)
-        while (idx != -1) {
-            intervals.add(Pair(idx, idx + needle.length))
-            idx = lowerText.indexOf(lowerNeedle, idx + 1)
-        }
-    }
-
-    if (intervals.isEmpty()) {
+    val merged = findNeedleIntervals(rawText, needles, isMatchCase, isWholeWord, isRegex)
+    if (merged.isEmpty()) {
         return AnnotatedString(rawText)
     }
 
-    // Sort intervals by start offset and merge overlaps
-    intervals.sortBy { it.first }
-    val merged = mutableListOf<Pair<Int, Int>>()
-    for (interval in intervals) {
-        if (merged.isEmpty()) {
-            merged.add(interval)
-        } else {
-            val last = merged.last()
-            if (interval.first <= last.second) {
-                merged[merged.size - 1] = Pair(last.first, maxOf(last.second, interval.second))
-            } else {
-                merged.add(interval)
-            }
-        }
-    }
-
-    val highlightBackground = if (isActiveMatch) theme.searchHighlightActive else theme.searchHighlightInactive
-    val highlightTextColor = if (isActiveMatch) theme.searchTextActive else theme.searchTextInactive
-    // A diffuse shadow behind the highlight chip gives a halo that reads as visual padding
-    // around the match — the blur radius is intentionally generous (4px active, 2px inactive)
-    // so the orange/amber glow bleeds slightly past the character cell boundaries.
-    val highlightShadow = if (isActiveMatch) {
-        Shadow(
-            color = theme.searchHighlightActive.copy(alpha = 0.75f),
-            offset = Offset.Zero,
-            blurRadius = 8f
-        )
-    } else {
-        Shadow(
-            color = theme.searchHighlightInactive.copy(alpha = 0.45f),
-            offset = Offset.Zero,
-            blurRadius = 4f
-        )
-    }
+    val activeShadow = Shadow(
+        color = theme.searchHighlightActive.copy(alpha = 0.75f),
+        offset = Offset.Zero,
+        blurRadius = 8f
+    )
+    val inactiveShadow = Shadow(
+        color = theme.searchHighlightInactive.copy(alpha = 0.45f),
+        offset = Offset.Zero,
+        blurRadius = 4f
+    )
 
     return buildAnnotatedString {
         var cursor = 0
@@ -182,12 +280,19 @@ private fun buildHighlightedLineDirect(
                 append(rawText.substring(cursor, start))
             }
             if (end > start) {
+                // If isActiveMatch is true, only the interval matching activeMatchColumn (or all if activeMatchColumn < 0)
+                // receives the prominent active styling; other intervals on the same line stay inactive.
+                val isThisActive = isActiveMatch && (activeMatchColumn < 0 || (activeMatchColumn >= start && activeMatchColumn < end))
+                val bg = if (isThisActive) theme.searchHighlightActive else theme.searchHighlightInactive
+                val textColor = if (isThisActive) theme.searchTextActive else theme.searchTextInactive
+                val shadow = if (isThisActive) activeShadow else inactiveShadow
+
                 withStyle(
                     SpanStyle(
-                        background = highlightBackground,
-                        color = highlightTextColor,
+                        background = bg,
+                        color = textColor,
                         fontWeight = FontWeight.Bold,
-                        shadow = highlightShadow
+                        shadow = shadow
                     )
                 ) {
                     append(rawText.substring(start, end))

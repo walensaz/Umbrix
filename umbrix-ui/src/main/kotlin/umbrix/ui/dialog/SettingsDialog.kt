@@ -31,8 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import umbrix.ui.components.UmbrixModalCard
 import org.jetbrains.jewel.ui.Orientation
 import org.jetbrains.jewel.ui.component.Checkbox
 import org.jetbrains.jewel.ui.component.DefaultButton
@@ -125,57 +124,47 @@ fun SettingsDialog(
         enableLigatures = defaults.enableLigatures
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                modifier = Modifier
-                    .size(800.dp, 560.dp)
-                    .background(UmbrixTheme.colors.surface, shape = RoundedCornerShape(8.dp))
-                    .border(1.dp, UmbrixTheme.colors.surfaceElevated, shape = RoundedCornerShape(8.dp))
-            ) {
-                // --- Dialog Header ---
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(UmbrixTheme.colors.surfacePanel)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Settings",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = UmbrixTheme.colors.textPrimary
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    Text(
-                        text = "✕",
-                        fontSize = 13.sp,
-                        color = UmbrixTheme.colors.textMuted,
-                        modifier = Modifier
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onDismiss
-                            )
-                            .padding(4.dp)
-                    )
+    UmbrixModalCard(
+        title = "Settings",
+        onDismiss = onDismiss,
+        width = 820.dp,
+        showCloseButton = true,
+        isScrollable = false,
+        actions = {
+            if (activeCategory == SettingsCategory.FONTS) {
+                OutlinedButton(onClick = { resetToDefaults() }) {
+                    Text("Reset to Defaults")
                 }
-
-                Divider(Orientation.Horizontal)
-
-                // --- Two-Pane Body ---
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            OutlinedButton(onClick = {
+                val current = buildCurrent()
+                SettingsManager.updateSettings(current)
+                onSaveSettings(current)
+            }) {
+                Text("Apply")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            DefaultButton(onClick = {
+                val current = buildCurrent()
+                SettingsManager.updateSettings(current)
+                onSaveSettings(current)
+                onDismiss()
+            }) {
+                Text("OK")
+            }
+        }
+    ) {
+        // --- Two-Pane Body ---
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(500.dp)
+        ) {
                     // Left Sidebar Navigation
                     Column(
                         modifier = Modifier
@@ -838,47 +827,8 @@ fun SettingsDialog(
                     }
                 }
 
-                Divider(Orientation.Horizontal)
-
-                // --- Dialog Actions Footer ---
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(UmbrixTheme.colors.surfacePanel)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (activeCategory == SettingsCategory.FONTS) {
-                        OutlinedButton(onClick = { resetToDefaults() }) {
-                            Text("Reset to Defaults")
-                        }
-                    }
-                    Spacer(modifier = Modifier.weight(1f))
-                    OutlinedButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    OutlinedButton(onClick = {
-                        val current = buildCurrent()
-                        SettingsManager.updateSettings(current)
-                        onSaveSettings(current)
-                    }) {
-                        Text("Apply")
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    DefaultButton(onClick = {
-                        val current = buildCurrent()
-                        SettingsManager.updateSettings(current)
-                        onSaveSettings(current)
-                        onDismiss()
-                    }) {
-                        Text("OK")
-                    }
-                }
-            }
         }
     }
-}
 
 @Composable
 private fun PluginCard(

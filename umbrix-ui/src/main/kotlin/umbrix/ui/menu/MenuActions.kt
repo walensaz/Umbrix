@@ -13,6 +13,7 @@ sealed interface MenuAction {
     data object OpenFile : MenuAction
     data class OpenRecentFile(val path: String) : MenuAction
     data object ClearRecentFiles : MenuAction
+    data object ExportSubFile : MenuAction
 
     // --- Search & Navigation ---
     data object Find : MenuAction
@@ -29,6 +30,7 @@ sealed interface MenuAction {
     // --- Modals & Diagnostics ---
     data object OpenSettings : MenuAction
     data object DiagnosticReport : MenuAction
+    data object KeyboardShortcuts : MenuAction
     data object About : MenuAction
 
     // --- Application Lifecycle ---
