@@ -651,7 +651,11 @@ fun LogViewportCanvas(
                                                 Pair(fetched, true)
                                             } else {
                                                 val fetched = session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
-                                                val match = searchResult?.matchingLines()?.contains(physicalLine) == true
+                                                val match = when {
+                                                    searchResult != null -> searchResult.matchingLines().contains(physicalLine)
+                                                    tab.isSearching && searchNeedles.isNotEmpty() -> true
+                                                    else -> false
+                                                }
                                                 Pair(fetched, match)
                                             }
                                         } catch (e: Exception) {
@@ -668,7 +672,7 @@ fun LogViewportCanvas(
                                         isSelected -> colors.rowSelected
                                         isActiveMatch -> colors.rowActiveMatch
                                         isMatch && isFilteredMode -> colors.rowFilteredMatch
-                                        isMatch -> colors.rowMatch
+                                        isMatch && searchResult != null -> colors.rowMatch
                                         else -> Color.Transparent
                                     }
 

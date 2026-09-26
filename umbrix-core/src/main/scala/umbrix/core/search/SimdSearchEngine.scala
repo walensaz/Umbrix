@@ -22,6 +22,8 @@ import umbrix.simd.VectorScanner
 import umbrix.simd.VectorSubstringScanner
 import umbrix.vfs.LogStorageReader
 
+import umbrix.vfs.platform.PlatformMemoryAdvisor
+
 /**
  * High-performance hardware SIMD search and query execution engine.
  *
@@ -30,12 +32,13 @@ import umbrix.vfs.LogStorageReader
  * 2. Regular expressions run with guaranteed O(N * M) linear-time execution via RE2J and `OffHeapCharSequence`.
  * 3. Compound Boolean expressions (AND / OR / NOT) evaluate via compressed RoaringBitmap bitwise operations.
  * 4. Pinned platform carrier threads (`Thread.ofPlatform()`) saturate multi-channel hardware memory bandwidth.
+ * 5. Cooperative atomic query cancellation ensures immediate responsiveness upon typing and aborts obsolete searches.
  */
 class SimdSearchEngine(
   val storageReader: LogStorageReader,
   val lineIndexer: PhysicalLineIndexer,
   val temporalTableOption: Option[TemporalCheckpointTable] = None,
-  val workerThreadsCount: Int = Runtime.getRuntime.availableProcessors().max(1)
+  val workerThreadsCount: Int = PlatformMemoryAdvisor.recommendedBackgroundWorkerCount
 ) extends AutoCloseable {
 
   private val threadFactory: ThreadFactory =
@@ -43,6 +46,28 @@ class SimdSearchEngine(
 
   private val executorService: ExecutorService =
     Executors.newFixedThreadPool(workerThreadsCount, threadFactory)
+
+  /** Monotonic query generation ID for cooperative cancellation of superseded searches. */
+  private val currentQueryId: java.util.concurrent.atomic.AtomicLong =
+    new java.util.concurrent.atomic.AtomicLong(0L)
+
+  @volatile private var activeFutures: java.util.List[java.util.concurrent.Future[java.lang.Boolean]] =
+    java.util.Collections.emptyList()
+
+  /**
+   * Cooperatively aborts any currently executing search across all worker threads.
+   * Increments the query generation and cancels active chunk tasks immediately.
+   */
+  def abortCurrentSearch(): Unit = {
+    currentQueryId.incrementAndGet()
+    val futuresToCancel = activeFutures
+    if (futuresToCancel != null && !futuresToCancel.isEmpty) {
+      val iterator = futuresToCancel.iterator()
+      while (iterator.hasNext) {
+        iterator.next().cancel(true)
+      }
+    }
+  }
 
   /** Chunk size for parallel search partitioning (16MB). */
   private final val partitionChunkSizeBytes: Long = 16L * 1024L * 1024L
@@ -85,93 +110,106 @@ class SimdSearchEngine(
     ast: QueryAst,
     progressConsumer: SearchResult => Unit
   ): SearchResult = {
+    val queryId: Long = currentQueryId.incrementAndGet()
     val startNanos: Long = System.nanoTime()
-    val matchingBitmap: Roaring64NavigableMap = evaluateAst(ast, progressConsumer, startNanos)
+    val matchingBitmap: Roaring64NavigableMap = evaluateAst(ast, progressConsumer, startNanos, queryId)
     val durationNanos: Long = System.nanoTime() - startNanos
+    val isComplete: Boolean = currentQueryId.get() == queryId
     val finalResult: SearchResult = SearchResult(
       matchingBitmap,
       matchingBitmap.getLongCardinality,
       durationNanos,
-      isComplete = true
+      isComplete = isComplete
     )
-    progressConsumer(finalResult)
+    if (isComplete) {
+      progressConsumer(finalResult)
+    }
     finalResult
   }
 
   private def evaluateAst(
     ast: QueryAst,
     progressConsumer: SearchResult => Unit,
-    startNanos: Long
+    startNanos: Long,
+    queryId: Long
   ): Roaring64NavigableMap = {
-    ast match {
-      case QueryAst.Empty =>
-        new Roaring64NavigableMap()
-
-      case QueryAst.Literal(needleText, isCaseSensitive) =>
-        if (needleText.isEmpty) {
+    if (currentQueryId.get() != queryId) {
+      new Roaring64NavigableMap()
+    } else {
+      ast match {
+        case QueryAst.Empty =>
           new Roaring64NavigableMap()
-        } else if (isCaseSensitive) {
-          searchLiteralParallel(needleText, progressConsumer, startNanos)
-        } else if (isAscii(needleText)) {
-          searchLiteralCaseInsensitiveParallel(needleText, progressConsumer, startNanos)
-        } else {
-          val caseInsensitiveRegex: Pattern = Pattern.compile("(?i)" + Pattern.quote(needleText))
-          searchRegexParallel(caseInsensitiveRegex, progressConsumer, startNanos)
-        }
 
-      case QueryAst.Regex(pattern) =>
-        searchRegexParallel(pattern, progressConsumer, startNanos)
+        case QueryAst.Literal(needleText, isCaseSensitive) =>
+          if (needleText.isEmpty) {
+            new Roaring64NavigableMap()
+          } else if (isCaseSensitive) {
+            searchLiteralParallel(needleText, progressConsumer, startNanos, queryId)
+          } else if (isAscii(needleText)) {
+            searchLiteralCaseInsensitiveParallel(needleText, progressConsumer, startNanos, queryId)
+          } else {
+            val caseInsensitiveRegex: Pattern = Pattern.compile("(?i)" + Pattern.quote(needleText))
+            searchRegexParallel(caseInsensitiveRegex, progressConsumer, startNanos, queryId)
+          }
 
-      case QueryAst.LevelFilter(logLevel) =>
-        val levelToken: String = logLevel.toString.toUpperCase
-        val levelRegex: Pattern = Pattern.compile("\\b" + Pattern.quote(levelToken) + "\\b")
-        searchRegexParallel(levelRegex, progressConsumer, startNanos)
+        case QueryAst.Regex(pattern) =>
+          searchRegexParallel(pattern, progressConsumer, startNanos, queryId)
 
-      case QueryAst.TimeRange(sinceMicrosOption, untilMicrosOption) =>
-        temporalTableOption match {
-          case Some(temporalTable) =>
-            val total: LineIndex = lineIndexer.totalLines
-            val maxValid: LineIndex = if (total > LineIndex.Zero) total - 1L else LineIndex.Zero
-            val startLine: LineIndex = sinceMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(LineIndex.Zero)
-            val endLine: LineIndex = untilMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(maxValid)
-            val rangeBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
-            if (startLine <= endLine && startLine < total) {
-              val endRange: LineIndex = (endLine + 1L).min(total)
-              rangeBitmap.addRange(startLine.value, endRange.value)
-            }
-            rangeBitmap
-          case None =>
-            val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
-            allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
-            allLinesBitmap
-        }
+        case QueryAst.LevelFilter(logLevel) =>
+          val levelToken: String = logLevel.toString.toUpperCase
+          val levelRegex: Pattern = Pattern.compile("\\b" + Pattern.quote(levelToken) + "\\b")
+          searchRegexParallel(levelRegex, progressConsumer, startNanos, queryId)
 
-      case QueryAst.And(leftAst, rightAst) =>
-        val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos)
-        if (leftBitmap.isEmpty) {
-          leftBitmap
-        } else {
-          val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos)
-          val result: Roaring64NavigableMap = new Roaring64NavigableMap()
-          result.or(leftBitmap)
-          result.and(rightBitmap)
-          result
-        }
+        case QueryAst.TimeRange(sinceMicrosOption, untilMicrosOption) =>
+          temporalTableOption match {
+            case Some(temporalTable) =>
+              val total: LineIndex = lineIndexer.totalLines
+              val maxValid: LineIndex = if (total > LineIndex.Zero) total - 1L else LineIndex.Zero
+              val startLine: LineIndex = sinceMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(LineIndex.Zero)
+              val endLine: LineIndex = untilMicrosOption.map(m => temporalTable.seekNearestLine(EpochMicros(m))).getOrElse(maxValid)
+              val rangeBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+              if (startLine <= endLine && startLine < total) {
+                val endRange: LineIndex = (endLine + 1L).min(total)
+                rangeBitmap.addRange(startLine.value, endRange.value)
+              }
+              rangeBitmap
+            case None =>
+              val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+              allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
+              allLinesBitmap
+          }
 
-      case QueryAst.Or(leftAst, rightAst) =>
-        val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos)
-        val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos)
-        val result: Roaring64NavigableMap = new Roaring64NavigableMap()
-        result.or(leftBitmap)
-        result.or(rightBitmap)
-        result
+        case QueryAst.And(leftAst, rightAst) =>
+          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId)
+          if (leftBitmap.isEmpty || currentQueryId.get() != queryId) {
+            leftBitmap
+          } else {
+            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId)
+            val result: Roaring64NavigableMap = new Roaring64NavigableMap()
+            result.or(leftBitmap)
+            result.and(rightBitmap)
+            result
+          }
 
-      case QueryAst.Not(innerAst) =>
-        val innerBitmap: Roaring64NavigableMap = evaluateAst(innerAst, _ => (), startNanos)
-        val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
-        allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
-        allLinesBitmap.andNot(innerBitmap)
-        allLinesBitmap
+        case QueryAst.Or(leftAst, rightAst) =>
+          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId)
+          if (currentQueryId.get() != queryId) {
+            leftBitmap
+          } else {
+            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId)
+            val result: Roaring64NavigableMap = new Roaring64NavigableMap()
+            result.or(leftBitmap)
+            result.or(rightBitmap)
+            result
+          }
+
+        case QueryAst.Not(innerAst) =>
+          val innerBitmap: Roaring64NavigableMap = evaluateAst(innerAst, _ => (), startNanos, queryId)
+          val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
+          allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
+          allLinesBitmap.andNot(innerBitmap)
+          allLinesBitmap
+      }
     }
   }
 
@@ -180,23 +218,26 @@ class SimdSearchEngine(
    *
    * Dispatches non-blocking carrier platform worker tasks across 16MB file partitions,
    * coordinates thread-safe match aggregation into a Roaring64NavigableMap, streams
-   * throttled progressive search updates to `progressConsumer`, and evicts memory pages.
+   * throttled progressive search updates to `progressConsumer`, and cooperatively aborts
+   * upon cancellation.
    *
    * @param overlapBytes trailing overlap bytes to extend chunk slice (e.g. needle.length - 1 for literals)
    * @param progressConsumer callback receiving incremental partial SearchResult snapshots
    * @param startNanos search commencement timestamp in nanoseconds
+   * @param queryId unique generation ID identifying this search pass for cancellation checking
    * @param chunkScanner function scanning a single off-heap chunk slice and recording matches into local bitmap
    * @return combined Roaring64NavigableMap containing all matching line numbers
    */
   private def dispatchParallelSearch(
     overlapBytes: Long,
     progressConsumer: SearchResult => Unit,
-    startNanos: Long
+    startNanos: Long,
+    queryId: Long
   )(
     chunkScanner: (MemorySegment, Long, Long, Long, Roaring64NavigableMap) => Unit
   ): Roaring64NavigableMap = {
     val fileSize: Long = storageReader.sizeBytes
-    if (fileSize <= 0L) {
+    if (fileSize <= 0L || currentQueryId.get() != queryId) {
       new Roaring64NavigableMap()
     } else {
       val chunkCount: Int = ((fileSize + partitionChunkSizeBytes - 1L) / partitionChunkSizeBytes).toInt
@@ -219,53 +260,49 @@ class SimdSearchEngine(
         tasks.add(() => {
           val localResultBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
           try {
-            if (!Thread.currentThread().isInterrupted) {
+            if (currentQueryId.get() == queryId && !Thread.currentThread().isInterrupted) {
               val chunkSlice: MemorySegment = storageReader.readSlice(chunkStartOffset, extendedChunkLength)
 
               chunkScanner(chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap)
-
-              storageReader.evict(chunkStartOffset, extendedChunkLength)
             }
 
-            val hasLocalMatches: Boolean = !localResultBitmap.isEmpty
-            val completedSoFar: Int = completedChunksCount.incrementAndGet()
+            if (currentQueryId.get() == queryId && !Thread.currentThread().isInterrupted) {
+              val hasLocalMatches: Boolean = !localResultBitmap.isEmpty
+              val completedSoFar: Int = completedChunksCount.incrementAndGet()
 
-            if ((completedSoFar & 63) == 0) {
-              storageReader.trimWorkingSet()
-            }
+              val shouldNotify: Boolean = stateLock.synchronized {
+                if (hasLocalMatches && currentQueryId.get() == queryId) {
+                  combinedBitmap.or(localResultBitmap)
+                }
+                val nowNanos: Long = System.nanoTime()
+                val isFirstMatch: Boolean = hasLocalMatches && firstMatchNotified.compareAndSet(false, true)
+                val isThrottled: Boolean = (nowNanos - lastProgressTimeNanos.get()) >= throttleIntervalNanos
+                val isLastChunk: Boolean = (completedSoFar == chunkCount)
 
-            val shouldNotify: Boolean = stateLock.synchronized {
-              if (hasLocalMatches) {
-                combinedBitmap.or(localResultBitmap)
+                if ((isFirstMatch || isThrottled) && !isLastChunk && currentQueryId.get() == queryId) {
+                  lastProgressTimeNanos.set(nowNanos)
+                  true
+                } else {
+                  false
+                }
               }
-              val nowNanos: Long = System.nanoTime()
-              val isFirstMatch: Boolean = hasLocalMatches && firstMatchNotified.compareAndSet(false, true)
-              val isThrottled: Boolean = (nowNanos - lastProgressTimeNanos.get()) >= throttleIntervalNanos
-              val isLastChunk: Boolean = (completedSoFar == chunkCount)
 
-              if ((isFirstMatch || isThrottled) && !isLastChunk) {
-                lastProgressTimeNanos.set(nowNanos)
-                true
-              } else {
-                false
-              }
-            }
-
-            if (shouldNotify) {
-              val snapshotBitmap: Roaring64NavigableMap = stateLock.synchronized {
-                val copy = new Roaring64NavigableMap()
-                copy.or(combinedBitmap)
-                copy
-              }
-              val currentDurationNanos: Long = System.nanoTime() - startNanos
-              progressConsumer(
-                SearchResult(
-                  snapshotBitmap,
-                  snapshotBitmap.getLongCardinality,
-                  currentDurationNanos,
-                  isComplete = false
+              if (shouldNotify && currentQueryId.get() == queryId) {
+                val snapshotBitmap: Roaring64NavigableMap = stateLock.synchronized {
+                  val copy = new Roaring64NavigableMap()
+                  copy.or(combinedBitmap)
+                  copy
+                }
+                val currentDurationNanos: Long = System.nanoTime() - startNanos
+                progressConsumer(
+                  SearchResult(
+                    snapshotBitmap,
+                    snapshotBitmap.getLongCardinality,
+                    currentDurationNanos,
+                    isComplete = false
+                  )
                 )
-              )
+              }
             }
           } finally {
             localResultBitmap.clear()
@@ -278,15 +315,18 @@ class SimdSearchEngine(
 
       try {
         val futures = executorService.invokeAll(tasks)
+        activeFutures = futures
         tasks.clear()
         futures.asScala.foreach { future =>
           try {
             future.get()
           } catch {
             case _: InterruptedException =>
+              abortCurrentSearch()
               Thread.currentThread().interrupt()
             case executionEx: java.util.concurrent.ExecutionException =>
               if (executionEx.getCause != null && executionEx.getCause.isInstanceOf[InterruptedException]) {
+                abortCurrentSearch()
                 Thread.currentThread().interrupt()
               }
             case _: java.util.concurrent.CancellationException =>
@@ -295,9 +335,11 @@ class SimdSearchEngine(
         }
       } catch {
         case _: InterruptedException =>
+          abortCurrentSearch()
           tasks.clear()
           Thread.currentThread().interrupt()
       } finally {
+        activeFutures = java.util.Collections.emptyList()
         storageReader.trimWorkingSet()
       }
       combinedBitmap
@@ -326,12 +368,13 @@ class SimdSearchEngine(
   private def searchLiteralParallel(
     needleText: String,
     progressConsumer: SearchResult => Unit,
-    startNanos: Long
+    startNanos: Long,
+    queryId: Long
   ): Roaring64NavigableMap = {
     val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
     val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
 
-    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos) {
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         VectorSubstringScanner.scanLiteral(
           chunkSlice,
@@ -351,12 +394,13 @@ class SimdSearchEngine(
   private def searchLiteralCaseInsensitiveParallel(
     needleText: String,
     progressConsumer: SearchResult => Unit,
-    startNanos: Long
+    startNanos: Long,
+    queryId: Long
   ): Roaring64NavigableMap = {
     val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
     val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
 
-    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos) {
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         VectorSubstringScanner.scanLiteralCaseInsensitive(
           chunkSlice,
@@ -376,9 +420,10 @@ class SimdSearchEngine(
   private def searchRegexParallel(
     pattern: Pattern,
     progressConsumer: SearchResult => Unit,
-    startNanos: Long
+    startNanos: Long,
+    queryId: Long
   ): Roaring64NavigableMap = {
-    dispatchParallelSearch(0L, progressConsumer, startNanos) {
+    dispatchParallelSearch(0L, progressConsumer, startNanos, queryId) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         val offHeapCharSequence: OffHeapCharSequence = new OffHeapCharSequence(chunkSlice, 0L, extendedChunkLength.toInt)
         val matcher: Matcher = pattern.matcher(offHeapCharSequence)
@@ -405,6 +450,7 @@ class SimdSearchEngine(
   }
 
   def close(): Unit = {
+    abortCurrentSearch()
     executorService.shutdown()
     try {
       if (!executorService.awaitTermination(3, TimeUnit.SECONDS)) {

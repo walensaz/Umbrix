@@ -146,4 +146,26 @@ class SimdSearchEngineTest extends FunSuite {
       storageReader.close()
     }
   }
+
+  test("SimdSearchEngine abortCurrentSearch stops query processing cooperatively") {
+    val tempFile: File = File.createTempFile("umbrix-abort-test-", ".log")
+    tempFile.deleteOnExit()
+    val content: Array[Byte] = ("2026-09-24 10:00:00 [ERROR] Connection lost to worker node\n" * 50000).getBytes(StandardCharsets.UTF_8)
+    Files.write(tempFile.toPath, content)
+
+    val storageReader: LogStorageReader = MemoryMappedLogReader.open(tempFile.toPath)
+    try {
+      val indexer: PhysicalLineIndexerImpl = PhysicalLineIndexerImpl.build(storageReader)
+      val searchEngine: SimdSearchEngine = new SimdSearchEngine(storageReader, indexer)
+      try {
+        searchEngine.abortCurrentSearch()
+        val result = searchEngine.search("Connection")
+        assert(result.isRight)
+      } finally {
+        searchEngine.close()
+      }
+    } finally {
+      storageReader.close()
+    }
+  }
 }

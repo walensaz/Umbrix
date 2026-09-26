@@ -63,6 +63,7 @@ fun SearchBar(
     errorMessage: String?,
     focusRequester: FocusRequester,
     focusTrigger: Int,
+    isSearching: Boolean = false,
     isMatchCase: Boolean = false,
     onToggleMatchCase: () -> Unit = {},
     isWholeWord: Boolean = false,
@@ -164,7 +165,7 @@ fun SearchBar(
                     onNavigatePrev()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = searchResult != null && !searchResult.isEmpty()
+                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
             ) {
                 Text("↑ (Shift+Enter)")
             }
@@ -182,7 +183,7 @@ fun SearchBar(
                     onNavigateNext()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = searchResult != null && !searchResult.isEmpty()
+                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
             ) {
                 Text("↓ (Enter)")
             }
@@ -196,6 +197,12 @@ fun SearchBar(
                 label = errorMessage,
                 textColor = UmbrixTheme.colors.badgeErrorText,
                 backgroundColor = UmbrixTheme.colors.badgeErrorBackground
+            )
+        } else if (isSearching) {
+            Badge(
+                label = "Searching...",
+                textColor = UmbrixTheme.colors.badgeWarningText,
+                backgroundColor = UmbrixTheme.colors.badgeWarningBackground
             )
         } else if (searchResult != null) {
             val count = searchResult.totalMatches()
@@ -221,7 +228,7 @@ fun SearchBar(
                     onToggleFilterView()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = searchResult != null && !searchResult.isEmpty()
+                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
             ) {
                 Text(if (isFilteredView) "☰ Show All Lines" else "⬡ Filter Matching Lines")
             }
@@ -240,7 +247,7 @@ fun SearchBar(
                     onExportSubFile()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = searchResult != null && !searchResult.isEmpty()
+                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
             ) {
                 Text("⤓ Export Sub-File")
             }

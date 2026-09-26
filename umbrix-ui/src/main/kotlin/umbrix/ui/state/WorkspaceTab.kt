@@ -22,7 +22,9 @@ class WorkspaceTab(
     var topVisibleLine: Long by mutableStateOf(initialTopVisibleLine)
     var subLineScrollOffsetPx: Float by mutableStateOf(0f)
     var searchQuery: String by mutableStateOf(initialSearchQuery)
+    var activeSearchQuery: String by mutableStateOf("")
     var searchResult: SearchResult? by mutableStateOf(initialSearchResult)
+    var isSearching: Boolean by mutableStateOf(false)
     var isFilteredView: Boolean by mutableStateOf(initialIsFilteredView)
     var selectedLineIndex: Long? by mutableStateOf(initialSelectedLineIndex)
     var searchJob: Job? = null

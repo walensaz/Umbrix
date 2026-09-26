@@ -383,6 +383,13 @@ class LogSession(
   }
 
   /**
+   * Cooperatively aborts any currently active search operation across all worker threads.
+   */
+  def abortSearch(): Unit = {
+    searchEngine.abortCurrentSearch()
+  }
+
+  /**
    * Constructs an O(1) virtual coordinate view mapping for filtered search results.
    */
   def createFilteredView(matchingBitmap: Roaring64NavigableMap): FilteredLineView = {

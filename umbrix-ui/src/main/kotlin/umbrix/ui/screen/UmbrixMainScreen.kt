@@ -236,16 +236,25 @@ fun UmbrixMainScreen(
     fun triggerSearch(queryText: String, immediate: Boolean = false) {
         val tab = currentTab ?: return
         tab.searchQuery = queryText
+        tab.session.abortSearch()
         tab.searchJob?.cancel()
 
         if (queryText.isBlank()) {
             tab.searchResult = null
+            tab.activeSearchQuery = ""
+            tab.isSearching = false
             tab.isFilteredView = false
             tab.selectedMatchColumn = -1
             searchErrorMessage = null
             tab.session.trimWorkingSet()
             return
         }
+
+        // Clear stale search result immediately so UI and highlights don't show old cached data
+        tab.searchResult = null
+        tab.selectedMatchColumn = -1
+        tab.isSearching = true
+        searchErrorMessage = null
 
         val effectiveQuery = when {
             tab.isSearchRegex -> {
@@ -266,12 +275,12 @@ fun UmbrixMainScreen(
         tab.searchJob = coroutineScope.launch {
             try {
                 if (!immediate) {
-                    delay(200) // Debounce rapid keystrokes to prevent concurrent query pile-up
+                    delay(250) // Debounce rapid keystrokes to prevent concurrent query pile-up
                 }
 
                 var hasJumpedToFirstMatch = false
 
-                val parseAndSearchResult: scala.util.Either<QueryParseError, SearchResult> = withContext(Dispatchers.Default) {
+                val parseAndSearchResult: scala.util.Either<QueryParseError, SearchResult> = kotlinx.coroutines.runInterruptible(Dispatchers.Default) {
                     tab.session.searchProgressive(effectiveQuery) { rawPartialResult: SearchResult ->
                         if (tab.searchQuery == queryText) {
                             val partialResult = if (tab.isTemporalFocusActive) {
@@ -279,50 +288,56 @@ fun UmbrixMainScreen(
                             } else {
                                 rawPartialResult
                             }
-                            tab.searchResult = partialResult
 
-                            if (!hasJumpedToFirstMatch && !partialResult.isEmpty()) {
-                                val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
-                                val firstLine = partialResult.findNextLine(minLine)
-                                if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
-                                    hasJumpedToFirstMatch = true
-                                    val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
-                                    if (tab.isFilteredView) {
-                                        val filteredView = tab.session.createFilteredView(partialResult.matchingLines())
-                                        val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
-                                        val intervals = findNeedleIntervals(
-                                            lineText,
-                                            needles,
-                                            isMatchCase = tab.isSearchMatchCase,
-                                            isWholeWord = tab.isSearchWholeWord,
-                                            isRegex = tab.isSearchRegex
-                                        )
-                                        tab.topVisibleLine = 0L
-                                        tab.selectedLineIndex = 0L
-                                        tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
-                                        tab.searchNavigationGeneration++
-                                    } else {
-                                        val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
-                                        val intervals = findNeedleIntervals(
-                                            lineText,
-                                            needles,
-                                            isMatchCase = tab.isSearchMatchCase,
-                                            isWholeWord = tab.isSearchWholeWord,
-                                            isRegex = tab.isSearchRegex
-                                        )
-                                        val halfVisible = (tab.visibleRowCount / 2).toLong()
-                                        if (tab.isTemporalFocusActive) {
-                                            val relativeLine = firstLine - tab.temporalFocusStartLine
-                                            val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
-                                            val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
-                                            tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
-                                        } else {
-                                            val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
-                                            tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                            coroutineScope.launch(Dispatchers.Main) {
+                                if (tab.searchQuery == queryText) {
+                                    tab.searchResult = partialResult
+                                    tab.activeSearchQuery = queryText
+
+                                    if (!hasJumpedToFirstMatch && !partialResult.isEmpty()) {
+                                        val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                                        val firstLine = partialResult.findNextLine(minLine)
+                                        if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
+                                            hasJumpedToFirstMatch = true
+                                            val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
+                                            if (tab.isFilteredView) {
+                                                val filteredView = tab.session.createFilteredView(partialResult.matchingLines())
+                                                val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                                val intervals = findNeedleIntervals(
+                                                    lineText,
+                                                    needles,
+                                                    isMatchCase = tab.isSearchMatchCase,
+                                                    isWholeWord = tab.isSearchWholeWord,
+                                                    isRegex = tab.isSearchRegex
+                                                )
+                                                tab.topVisibleLine = 0L
+                                                tab.selectedLineIndex = 0L
+                                                tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                                tab.searchNavigationGeneration++
+                                            } else {
+                                                val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                                val intervals = findNeedleIntervals(
+                                                    lineText,
+                                                    needles,
+                                                    isMatchCase = tab.isSearchMatchCase,
+                                                    isWholeWord = tab.isSearchWholeWord,
+                                                    isRegex = tab.isSearchRegex
+                                                )
+                                                val halfVisible = (tab.visibleRowCount / 2).toLong()
+                                                if (tab.isTemporalFocusActive) {
+                                                    val relativeLine = firstLine - tab.temporalFocusStartLine
+                                                    val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
+                                                    val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
+                                                    tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
+                                                } else {
+                                                    val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                                    tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                                }
+                                                tab.selectedLineIndex = firstLine
+                                                tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                                tab.searchNavigationGeneration++
+                                            }
                                         }
-                                        tab.selectedLineIndex = firstLine
-                                        tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
-                                        tab.searchNavigationGeneration++
                                     }
                                 }
                             }
@@ -333,67 +348,74 @@ fun UmbrixMainScreen(
                 // Guard: Discard stale result if query was superseded while searching
                 if (tab.searchQuery != queryText) return@launch
 
-                parseAndSearchResult.fold(
-                    { parseError: QueryParseError ->
-                        searchErrorMessage = parseError.message()
-                        tab.searchResult = null
-                        tab.selectedMatchColumn = -1
-                    },
-                    { rawSearchResult: SearchResult ->
-                        searchErrorMessage = null
-                        val searchResult = if (tab.isTemporalFocusActive) {
-                            rawSearchResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
-                        } else {
-                            rawSearchResult
-                        }
-                        tab.searchResult = searchResult
-
-                        if (!hasJumpedToFirstMatch && !searchResult.isEmpty()) {
-                            val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
-                            val firstLine = searchResult.findNextLine(minLine)
-                            if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
-                                val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
-                                if (tab.isFilteredView) {
-                                    val filteredView = tab.session.createFilteredView(searchResult.matchingLines())
-                                    val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
-                                    val intervals = findNeedleIntervals(
-                                        lineText,
-                                        needles,
-                                        isMatchCase = tab.isSearchMatchCase,
-                                        isWholeWord = tab.isSearchWholeWord,
-                                        isRegex = tab.isSearchRegex
-                                    )
-                                    tab.topVisibleLine = 0L
-                                    tab.selectedLineIndex = 0L
-                                    tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
-                                    tab.searchNavigationGeneration++
+                withContext(Dispatchers.Main) {
+                    if (tab.searchQuery == queryText) {
+                        tab.isSearching = false
+                        parseAndSearchResult.fold(
+                            { parseError: QueryParseError ->
+                                searchErrorMessage = parseError.message()
+                                tab.searchResult = null
+                                tab.activeSearchQuery = ""
+                                tab.selectedMatchColumn = -1
+                            },
+                            { rawSearchResult: SearchResult ->
+                                searchErrorMessage = null
+                                val searchResult = if (tab.isTemporalFocusActive) {
+                                    rawSearchResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
                                 } else {
-                                    val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
-                                    val intervals = findNeedleIntervals(
-                                        lineText,
-                                        needles,
-                                        isMatchCase = tab.isSearchMatchCase,
-                                        isWholeWord = tab.isSearchWholeWord,
-                                        isRegex = tab.isSearchRegex
-                                    )
-                                    val halfVisible = (tab.visibleRowCount / 2).toLong()
-                                    if (tab.isTemporalFocusActive) {
-                                        val relativeLine = firstLine - tab.temporalFocusStartLine
-                                        val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
-                                        val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
-                                        tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
-                                    } else {
-                                        val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
-                                        tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                    rawSearchResult
+                                }
+                                tab.searchResult = searchResult
+                                tab.activeSearchQuery = queryText
+
+                                if (!hasJumpedToFirstMatch && !searchResult.isEmpty()) {
+                                    val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                                    val firstLine = searchResult.findNextLine(minLine)
+                                    if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
+                                        val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
+                                        if (tab.isFilteredView) {
+                                            val filteredView = tab.session.createFilteredView(searchResult.matchingLines())
+                                            val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                            val intervals = findNeedleIntervals(
+                                                lineText,
+                                                needles,
+                                                isMatchCase = tab.isSearchMatchCase,
+                                                isWholeWord = tab.isSearchWholeWord,
+                                                isRegex = tab.isSearchRegex
+                                            )
+                                            tab.topVisibleLine = 0L
+                                            tab.selectedLineIndex = 0L
+                                            tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                            tab.searchNavigationGeneration++
+                                        } else {
+                                            val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                            val intervals = findNeedleIntervals(
+                                                lineText,
+                                                needles,
+                                                isMatchCase = tab.isSearchMatchCase,
+                                                isWholeWord = tab.isSearchWholeWord,
+                                                isRegex = tab.isSearchRegex
+                                            )
+                                            val halfVisible = (tab.visibleRowCount / 2).toLong()
+                                            if (tab.isTemporalFocusActive) {
+                                                val relativeLine = firstLine - tab.temporalFocusStartLine
+                                                val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
+                                                val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
+                                                tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
+                                            } else {
+                                                val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                                tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                            }
+                                            tab.selectedLineIndex = firstLine
+                                            tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
+                                            tab.searchNavigationGeneration++
+                                        }
                                     }
-                                    tab.selectedLineIndex = firstLine
-                                    tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
-                                    tab.searchNavigationGeneration++
                                 }
                             }
-                        }
+                        )
                     }
-                )
+                }
             } catch (e: CancellationException) {
                 // Normal coroutine cancellation when user continues typing
             } catch (e: Throwable) {
@@ -407,6 +429,9 @@ fun UmbrixMainScreen(
                 WorkstationErrorHandler.reportException(e, context)
                 searchErrorMessage = "Search failed: ${e.message}"
             } finally {
+                if (tab.searchQuery == queryText) {
+                    tab.isSearching = false
+                }
                 tab.session.trimWorkingSet()
             }
         }
@@ -936,6 +961,7 @@ fun UmbrixMainScreen(
                 errorMessage = searchErrorMessage,
                 focusRequester = searchFocusRequester,
                 focusTrigger = searchFocusTrigger,
+                isSearching = currentTab?.isSearching ?: false,
                 isMatchCase = currentTab?.isSearchMatchCase ?: false,
                 onToggleMatchCase = {
                     currentTab?.let { tab ->
@@ -984,7 +1010,7 @@ fun UmbrixMainScreen(
                 },
                 onNavigateNext = {
                     val tab = currentTab
-                    if (tab != null && tab.searchResult == null && tab.searchQuery.isNotBlank()) {
+                    if (tab != null && (tab.searchResult == null || tab.isSearching) && tab.searchQuery.isNotBlank()) {
                         triggerSearch(tab.searchQuery, immediate = true)
                     } else {
                         navigateSearch(forward = true)
@@ -992,7 +1018,7 @@ fun UmbrixMainScreen(
                 },
                 onNavigatePrev = {
                     val tab = currentTab
-                    if (tab != null && tab.searchResult == null && tab.searchQuery.isNotBlank()) {
+                    if (tab != null && (tab.searchResult == null || tab.isSearching) && tab.searchQuery.isNotBlank()) {
                         triggerSearch(tab.searchQuery, immediate = true)
                     } else {
                         navigateSearch(forward = false)
