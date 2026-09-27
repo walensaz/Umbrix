@@ -218,6 +218,7 @@ fun BottomStatusBar(
             }
 
             if (settings.statusBarShowMode) {
+                statusItems.add(settings.viewportMode.displayLabel)
                 when {
                     activeTab?.isFilteredView == true -> {
                         statusItems.add("Filtered (${formatNumberWithCommas(activeTab.searchResult?.totalMatches() ?: 0L)} matches)")

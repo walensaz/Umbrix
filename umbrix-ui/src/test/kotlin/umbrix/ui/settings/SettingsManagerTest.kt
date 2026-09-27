@@ -152,4 +152,39 @@ class SettingsManagerTest {
             SettingsManager.updateSettings(initial)
         }
     }
+
+    @Test
+    fun testStatusBarTelemetryJsonRoundTrip() {
+        val original = WorkstationSettings(
+            statusBarShowPosition = false,
+            statusBarShowDocumentStats = false,
+            statusBarShowMode = false,
+            statusBarShowIndexingDetails = true,
+            statusBarShowMemory = true
+        )
+        val json = SettingsManager.buildSettingsJson(original)
+        val parsed = SettingsManager.parseJsonToSettings(json)
+        assertEquals(false, parsed.statusBarShowPosition)
+        assertEquals(false, parsed.statusBarShowDocumentStats)
+        assertEquals(false, parsed.statusBarShowMode)
+        assertEquals(true, parsed.statusBarShowIndexingDetails)
+        assertEquals(true, parsed.statusBarShowMemory)
+    }
+
+    @Test
+    fun testLegacyKeyAliasesParsing() {
+        val jsonWithAliases = """
+            {
+              "isMinimapVisible": false,
+              "languageProfile": "syslog",
+              "isSimdEnabled": false,
+              "showWhitespace": true
+            }
+        """.trimIndent()
+        val parsed = SettingsManager.parseJsonToSettings(jsonWithAliases)
+        assertEquals(false, parsed.isMinimapEnabled)
+        assertEquals("syslog", parsed.activeLanguageProfileId)
+        assertEquals(false, parsed.enableSimdAcceleration)
+        assertEquals(true, parsed.showWhitespaceChars)
+    }
 }

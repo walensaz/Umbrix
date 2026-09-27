@@ -6,19 +6,25 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Job
 import umbrix.core.search.SearchResult
 import umbrix.core.session.LogSession
+import umbrix.ui.bookmarks.BookmarkManager
+import umbrix.ui.scratchpad.ScratchpadSession
 
 /**
  * State container for an active document tab with reactive Compose state properties.
  */
 class WorkspaceTab(
-    val session: LogSession,
+    val session: LogSession? = null,
     val filePath: String,
+    val scratchpadSession: ScratchpadSession? = null,
+    val bookmarkManager: BookmarkManager = BookmarkManager(),
     initialTopVisibleLine: Long = 0L,
     initialSearchQuery: String = "",
     initialSearchResult: SearchResult? = null,
     initialIsFilteredView: Boolean = false,
     initialSelectedLineIndex: Long? = null
 ) {
+    val isScratchpad: Boolean get() = scratchpadSession != null
+    val title: String get() = scratchpadSession?.title ?: session?.fileName() ?: java.io.File(filePath).name
     var topVisibleLine: Long by mutableStateOf(initialTopVisibleLine)
     var subLineScrollOffsetPx: Float by mutableStateOf(0f)
     var searchQuery: String by mutableStateOf(initialSearchQuery)
@@ -26,6 +32,7 @@ class WorkspaceTab(
     var searchResult: SearchResult? by mutableStateOf(initialSearchResult)
     var isSearching: Boolean by mutableStateOf(false)
     var isFilteredView: Boolean by mutableStateOf(initialIsFilteredView)
+    var isBookmarkFilterActive: Boolean by mutableStateOf(false)
     var selectedLineIndex: Long? by mutableStateOf(initialSelectedLineIndex)
     var searchJob: Job? = null
 
@@ -66,10 +73,10 @@ class WorkspaceTab(
      */
     var maxObservedContentWidthPx: Float by mutableStateOf(0f)
 
-    var indexingProgress: Double by mutableStateOf(session.indexingProgressPercent())
-    var indexingStatus: String by mutableStateOf(session.indexingStatusText())
-    var isIndexing: Boolean by mutableStateOf(!session.isIndexingComplete())
-    var liveTotalLines: Long by mutableStateOf((session.totalLines() as Number).toLong())
+    var indexingProgress: Double by mutableStateOf(session?.indexingProgressPercent() ?: 100.0)
+    var indexingStatus: String by mutableStateOf(session?.indexingStatusText() ?: "Ready")
+    var isIndexing: Boolean by mutableStateOf(session?.let { !it.isIndexingComplete() } ?: false)
+    var liveTotalLines: Long by mutableStateOf(session?.let { (it.totalLines() as Number).toLong() } ?: 0L)
 
     // --- Temporal Navigation & Focus Mode ---
     var isTimeScrubberOpen: Boolean by mutableStateOf(false)
@@ -78,6 +85,30 @@ class WorkspaceTab(
     var temporalFocusEndMicros: Long by mutableStateOf(0L)
     var temporalFocusStartLine: Long by mutableStateOf(0L)
     var temporalFocusEndLine: Long by mutableStateOf(0L)
+
+    // --- Tri-Mode Viewport: Expandable Multi-Line Events ---
+    val expandedEventHeaders = androidx.compose.runtime.mutableStateMapOf<Long, Boolean>()
+    var isExpandAllActive: Boolean by mutableStateOf(false)
+
+    fun isEventExpanded(eventHeaderLine: Long): Boolean {
+        val override = expandedEventHeaders[eventHeaderLine]
+        return override ?: isExpandAllActive
+    }
+
+    fun toggleEventExpansion(eventHeaderLine: Long) {
+        val current = isEventExpanded(eventHeaderLine)
+        expandedEventHeaders[eventHeaderLine] = !current
+    }
+
+    fun expandAllEvents() {
+        isExpandAllActive = true
+        expandedEventHeaders.clear()
+    }
+
+    fun collapseAllEvents() {
+        isExpandAllActive = false
+        expandedEventHeaders.clear()
+    }
 
     val selectionState: umbrix.ui.selection.TextSelectionState = umbrix.ui.selection.TextSelectionState()
 }

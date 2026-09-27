@@ -137,6 +137,7 @@ fun WindowScope.IntegratedTitleBar(
                 ) {
                     HamburgerMenuContent(
                         settings = settings,
+                        activeDocumentTitle = activeDocumentTitle,
                         onAction = { menuAction ->
                             isMenuOpen = false
                             onMenuAction(menuAction)

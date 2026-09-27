@@ -47,6 +47,7 @@ enum class JumpMode {
 fun GoToTimestampDialog(
     session: LogSession,
     currentLine: Long,
+    documentTitle: String? = null,
     onGoToLine: (targetPhysicalLine: Long) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -104,8 +105,10 @@ fun GoToTimestampDialog(
         }
     }
 
+    val titleText = if (!documentTitle.isNullOrBlank()) "Go To Line / Timestamp — $documentTitle" else "Go To Line / Timestamp"
+
     UmbrixModalCard(
-        title = "Go To Line / Timestamp",
+        title = titleText,
         onDismiss = onDismiss,
         width = 520.dp,
         showCloseButton = true,

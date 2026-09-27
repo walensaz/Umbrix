@@ -43,7 +43,9 @@ import org.jetbrains.jewel.ui.component.Slider
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
 import umbrix.ui.components.Badge
+import umbrix.ui.settings.CommandPaletteStyle
 import umbrix.ui.settings.SettingsManager
+import umbrix.ui.settings.ViewportLayoutMode
 import umbrix.ui.settings.WorkstationSettings
 import umbrix.ui.theme.EditorTypography
 import umbrix.ui.theme.FontSpec
@@ -53,6 +55,7 @@ import umbrix.ui.theme.UmbrixTheme
 private enum class SettingsCategory(val displayName: String, val icon: String) {
     APPEARANCE("Appearance & Minimap", "🗺"),
     FONTS("Fonts & Typography", "🔤"),
+    VIEW("View & Viewport", "👁"),
     LANGUAGES("Log Languages & Profiles", "🌐"),
     PERFORMANCE("Performance & SIMD", "⚡"),
     PLUGINS("Plugins & Analyzers", "🧩")
@@ -90,7 +93,21 @@ fun SettingsDialog(
     var uiFontSizePt by remember { mutableStateOf(initialSettings.uiFontSizePt) }
     var enableLigatures by remember { mutableStateOf(initialSettings.enableLigatures) }
 
-    // copy() preserves menu-driven state (recent files, viewport mode, view toggles) not edited here
+    var viewportMode by remember { mutableStateOf(initialSettings.viewportMode) }
+    var showLineNumbers by remember { mutableStateOf(initialSettings.showLineNumbers) }
+    var showWhitespaceChars by remember { mutableStateOf(initialSettings.showWhitespaceChars) }
+    var statusBarShowPosition by remember { mutableStateOf(initialSettings.statusBarShowPosition) }
+    var statusBarShowDocumentStats by remember { mutableStateOf(initialSettings.statusBarShowDocumentStats) }
+    var statusBarShowMode by remember { mutableStateOf(initialSettings.statusBarShowMode) }
+    var statusBarShowIndexingDetails by remember { mutableStateOf(initialSettings.statusBarShowIndexingDetails) }
+    var statusBarShowMemory by remember { mutableStateOf(initialSettings.statusBarShowMemory) }
+
+    var commandPaletteStyle by remember { mutableStateOf(initialSettings.commandPaletteStyle) }
+    var commandPaletteShowShortcuts by remember { mutableStateOf(initialSettings.commandPaletteShowShortcuts) }
+    var enableVimColonTrigger by remember { mutableStateOf(initialSettings.enableVimColonTrigger) }
+    var enableDoubleShiftTrigger by remember { mutableStateOf(initialSettings.enableDoubleShiftTrigger) }
+
+    // copy() preserves menu-driven state (recent files) not edited here
     fun buildCurrent(): WorkstationSettings = initialSettings.copy(
         themeName = themeName,
         isMinimapEnabled = isMinimapEnabled,
@@ -110,7 +127,19 @@ fun SettingsDialog(
         editorFontWeight = editorFontWeight,
         uiFontFamily = uiFontFamily,
         uiFontSizePt = uiFontSizePt,
-        enableLigatures = enableLigatures
+        enableLigatures = enableLigatures,
+        viewportMode = viewportMode,
+        showLineNumbers = showLineNumbers,
+        showWhitespaceChars = showWhitespaceChars,
+        statusBarShowPosition = statusBarShowPosition,
+        statusBarShowDocumentStats = statusBarShowDocumentStats,
+        statusBarShowMode = statusBarShowMode,
+        statusBarShowIndexingDetails = statusBarShowIndexingDetails,
+        statusBarShowMemory = statusBarShowMemory,
+        commandPaletteStyle = commandPaletteStyle,
+        commandPaletteShowShortcuts = commandPaletteShowShortcuts,
+        enableVimColonTrigger = enableVimColonTrigger,
+        enableDoubleShiftTrigger = enableDoubleShiftTrigger
     )
 
     fun resetToDefaults() {
@@ -122,6 +151,10 @@ fun SettingsDialog(
         uiFontFamily = defaults.uiFontFamily
         uiFontSizePt = defaults.uiFontSizePt
         enableLigatures = defaults.enableLigatures
+        commandPaletteStyle = defaults.commandPaletteStyle
+        commandPaletteShowShortcuts = defaults.commandPaletteShowShortcuts
+        enableVimColonTrigger = defaults.enableVimColonTrigger
+        enableDoubleShiftTrigger = defaults.enableDoubleShiftTrigger
     }
 
     UmbrixModalCard(
@@ -640,6 +673,336 @@ fun SettingsDialog(
                                             ),
                                             color = UmbrixTheme.colors.textEditor
                                         )
+                                    }
+                                }
+                            }
+
+                            SettingsCategory.VIEW -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "Viewport & Layout",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    // 1. Viewport Layout Mode
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Viewport Layout Mode",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+
+                                        val modes = listOf(
+                                            Triple(ViewportLayoutMode.EXPANDABLE, "Expandable (Default)", "20px base rows with dropdown chevrons [⯈] to inline multi-line stack traces"),
+                                            Triple(ViewportLayoutMode.COMPACT, "Compact Fixed Mode", "Strict 20px rows, maximum 60–120 FPS performance, horizontal scrolling"),
+                                            Triple(ViewportLayoutMode.FULL_WRAP, "Full Wrap Mode", "Soft line-wrapping within viewport width with 4,096 char safety clamp")
+                                        )
+
+                                        for ((mode, title, desc) in modes) {
+                                            Row(
+                                                verticalAlignment = Alignment.Top,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { viewportMode = mode }
+                                                    .padding(vertical = 4.dp)
+                                            ) {
+                                                RadioButton(
+                                                    selected = (viewportMode == mode),
+                                                    onClick = { viewportMode = mode }
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = title,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = if (viewportMode == mode) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
+                                                    )
+                                                    Text(
+                                                        text = desc,
+                                                        fontSize = 11.sp,
+                                                        color = UmbrixTheme.colors.textMuted
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 2. Gutter & Text Rendering
+                                    Text(
+                                        text = "Gutter & Text Visualization",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { showLineNumbers = !showLineNumbers }
+                                        ) {
+                                            Checkbox(
+                                                checked = showLineNumbers,
+                                                onCheckedChange = { showLineNumbers = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Show 64-bit Line Numbers",
+                                                    fontSize = 12.sp,
+                                                    color = UmbrixTheme.colors.textPrimary
+                                                )
+                                                Text(
+                                                    text = "Renders 1-indexed physical or virtual line numbers in the viewport gutter",
+                                                    fontSize = 11.sp,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { showWhitespaceChars = !showWhitespaceChars }
+                                        ) {
+                                            Checkbox(
+                                                checked = showWhitespaceChars,
+                                                onCheckedChange = { showWhitespaceChars = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Show Whitespace Glyphs",
+                                                    fontSize = 12.sp,
+                                                    color = UmbrixTheme.colors.textPrimary
+                                                )
+                                                Text(
+                                                    text = "Renders subtle visible indicators for space (·) and tab (→) characters",
+                                                    fontSize = 11.sp,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 3. Status Bar Telemetry Customization
+                                    Text(
+                                        text = "Status Bar Telemetry",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { statusBarShowPosition = !statusBarShowPosition }
+                                        ) {
+                                            Checkbox(
+                                                checked = statusBarShowPosition,
+                                                onCheckedChange = { statusBarShowPosition = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show Line & Cursor Position",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { statusBarShowDocumentStats = !statusBarShowDocumentStats }
+                                        ) {
+                                            Checkbox(
+                                                checked = statusBarShowDocumentStats,
+                                                onCheckedChange = { statusBarShowDocumentStats = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show Document Total Lines & File Size",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { statusBarShowMode = !statusBarShowMode }
+                                        ) {
+                                            Checkbox(
+                                                checked = statusBarShowMode,
+                                                onCheckedChange = { statusBarShowMode = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show Viewport Layout Mode",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { statusBarShowIndexingDetails = !statusBarShowIndexingDetails }
+                                        ) {
+                                            Checkbox(
+                                                checked = statusBarShowIndexingDetails,
+                                                onCheckedChange = { statusBarShowIndexingDetails = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show SIMD Vector Width & Indexing Telemetry",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { statusBarShowMemory = !statusBarShowMemory }
+                                        ) {
+                                            Checkbox(
+                                                checked = statusBarShowMemory,
+                                                onCheckedChange = { statusBarShowMemory = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show JVM Heap Memory & GC Invariant Telemetry",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 4. Command Palette & Workflow Persona
+                                    Text(
+                                        text = "Command Palette & Persona",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Palette Style & Shortcuts",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+
+                                        val styles = listOf(
+                                            Triple(CommandPaletteStyle.OMNI, "Unified Omni (Default)", "Intelligently auto-detects '>', ':', '@', '#' prefixes. Full fuzzy matching across all categories."),
+                                            Triple(CommandPaletteStyle.VSCODE, "VS Code Style", "Ctrl+Shift+P opens '>' actions prompt; Ctrl+P opens quick file open. Compact single-line input."),
+                                            Triple(CommandPaletteStyle.INTELLIJ, "IntelliJ Search Everywhere", "Double Shift opens full search with category filter pills [All] [Actions] [Files] [Settings]."),
+                                            Triple(CommandPaletteStyle.VIM, "Vim / Linux Ex-Commands", "Modal ':' prompt with command line preview, ex-commands (:w, :q, :line), and status indicator.")
+                                        )
+
+                                        for ((style, title, desc) in styles) {
+                                            Row(
+                                                verticalAlignment = Alignment.Top,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { commandPaletteStyle = style }
+                                                    .padding(vertical = 4.dp)
+                                            ) {
+                                                RadioButton(
+                                                    selected = (commandPaletteStyle == style),
+                                                    onClick = { commandPaletteStyle = style }
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Column {
+                                                    Text(
+                                                        text = title,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Medium,
+                                                        color = if (commandPaletteStyle == style) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textSecondary
+                                                    )
+                                                    Text(
+                                                        text = desc,
+                                                        fontSize = 11.sp,
+                                                        color = UmbrixTheme.colors.textMuted
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.height(4.dp))
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { enableDoubleShiftTrigger = !enableDoubleShiftTrigger }
+                                        ) {
+                                            Checkbox(
+                                                checked = enableDoubleShiftTrigger,
+                                                onCheckedChange = { enableDoubleShiftTrigger = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Enable Double-Shift Trigger",
+                                                    fontSize = 12.sp,
+                                                    color = UmbrixTheme.colors.textPrimary
+                                                )
+                                                Text(
+                                                    text = "Quickly pressing Shift twice within 400ms opens the Command Palette",
+                                                    fontSize = 11.sp,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { enableVimColonTrigger = !enableVimColonTrigger }
+                                        ) {
+                                            Checkbox(
+                                                checked = enableVimColonTrigger,
+                                                onCheckedChange = { enableVimColonTrigger = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Enable Vim ':' Trigger in Viewport",
+                                                    fontSize = 12.sp,
+                                                    color = UmbrixTheme.colors.textPrimary
+                                                )
+                                                Text(
+                                                    text = "Pressing ':' while viewing logs opens the Command Palette in Ex-command mode",
+                                                    fontSize = 11.sp,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                            }
+                                        }
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { commandPaletteShowShortcuts = !commandPaletteShowShortcuts }
+                                        ) {
+                                            Checkbox(
+                                                checked = commandPaletteShowShortcuts,
+                                                onCheckedChange = { commandPaletteShowShortcuts = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Show Keyboard Shortcuts in Command Results",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                        }
                                     }
                                 }
                             }

@@ -11,14 +11,19 @@ sealed interface MenuAction {
 
     // --- File Operations ---
     data object OpenFile : MenuAction
+    data object NewScratchpad : MenuAction
     data class OpenRecentFile(val path: String) : MenuAction
     data object ClearRecentFiles : MenuAction
     data object ExportSubFile : MenuAction
 
     // --- Search & Navigation ---
+    data object CommandPalette : MenuAction
     data object Find : MenuAction
     data object GoToLineTimestamp : MenuAction
     data object TemporalRange : MenuAction
+    data object ToggleTimelineDrawer : MenuAction
+    data object ManageBookmarks : MenuAction
+    data object ToggleBookmarkFilter : MenuAction
 
     // --- View Configurations ---
     data class SetViewportMode(val mode: ViewportLayoutMode) : MenuAction

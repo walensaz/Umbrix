@@ -21,6 +21,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
@@ -38,11 +39,14 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.jewel.ui.Orientation
 import org.jetbrains.jewel.ui.component.Divider
 import umbrix.core.diagnostics.ForensicErrorReportGenerator
+import umbrix.ui.toast.ToastHost
+import umbrix.ui.toast.ToastManager
 import umbrix.core.diagnostics.ForensicReportContext
 import umbrix.core.parser.QueryParseError
 import umbrix.core.search.SearchResult
 import umbrix.core.session.LogSession
 import umbrix.ui.components.ForensicErrorBanner
+import umbrix.ui.bookmarks.BookmarkManagerDialog
 import umbrix.ui.dialog.AboutDialog
 import umbrix.ui.dialog.ExportSubFileDialog
 import umbrix.ui.dialog.GoToLineDialog
@@ -50,6 +54,14 @@ import umbrix.ui.dialog.GoToTimestampDialog
 import umbrix.ui.dialog.KeyboardShortcutsDialog
 import umbrix.ui.dialog.SettingsDialog
 import umbrix.ui.error.WorkstationErrorHandler
+import umbrix.ui.palette.CommandExecutionContext
+import umbrix.ui.palette.CommandPaletteDialog
+import umbrix.ui.scratchpad.ScratchpadEditorCanvas
+import umbrix.ui.scratchpad.ScratchpadManager
+import umbrix.ui.timeline.EventTag
+import umbrix.ui.timeline.InvestigationTimelineDrawer
+import umbrix.ui.timeline.InvestigationTimelineManager
+import umbrix.ui.timeline.TimelineExportDialog
 import umbrix.ui.menu.MenuAction
 import umbrix.ui.menu.MenuSettingsReducer
 import umbrix.ui.search.SearchBar
@@ -101,12 +113,18 @@ fun UmbrixMainScreen(
         onDispose {
             for (tab in openTabs) {
                 try {
-                    tab.session.close()
+                    tab.session?.close()
                 } catch (_: Throwable) {}
             }
         }
     }
     var activeTabIndex by remember { mutableStateOf(0) }
+
+    val timelineManager = remember { InvestigationTimelineManager() }
+    val scratchpadManager = remember { ScratchpadManager() }
+    var isTimelineDrawerOpen by remember { mutableStateOf(false) }
+    var isBookmarkDialogOpen by remember { mutableStateOf(false) }
+    var isTimelineExportDialogOpen by remember { mutableStateOf(false) }
 
     var isIndexingActive by remember { mutableStateOf(false) }
     var statusMessageText by remember { mutableStateOf("Ready — No log file loaded.") }
@@ -118,6 +136,9 @@ fun UmbrixMainScreen(
     var isAboutDialogVisible by remember { mutableStateOf(false) }
     var isShortcutsDialogVisible by remember { mutableStateOf(false) }
     var isExportDialogVisible by remember { mutableStateOf(false) }
+    var isCommandPaletteVisible by remember { mutableStateOf(false) }
+    var commandPaletteInitialQuery by remember { mutableStateOf("") }
+    var lastShiftPressTimeMs by remember { mutableStateOf(0L) }
 
     val currentTab: WorkspaceTab? = openTabs.getOrNull(activeTabIndex)
     val activeSession: LogSession? = currentTab?.session
@@ -129,6 +150,7 @@ fun UmbrixMainScreen(
         val targetFile = File(targetPath)
         if (!targetFile.exists() || !targetFile.isFile) {
             statusMessageText = "Error: File does not exist: $targetPath"
+            ToastManager.error("File does not exist: ${targetFile.name}")
             return
         }
 
@@ -156,7 +178,7 @@ fun UmbrixMainScreen(
                     val oldTab = openTabs[activeTabIndex]
                     openTabs[activeTabIndex] = newTab
                     withContext(Dispatchers.IO) {
-                        oldTab.session.close()
+                        oldTab.session?.close()
                     }
                 }
 
@@ -215,7 +237,7 @@ fun UmbrixMainScreen(
             val tabToClose = openTabs.removeAt(tabIndex)
             coroutineScope.launch(Dispatchers.IO) {
                 try {
-                    tabToClose.session.close()
+                    tabToClose.session?.close()
                 } catch (e: Throwable) {
                     if (ForensicErrorReportGenerator.isFatal(e)) throw e
                     WorkstationErrorHandler.reportException(e)
@@ -235,8 +257,9 @@ fun UmbrixMainScreen(
 
     fun triggerSearch(queryText: String, immediate: Boolean = false) {
         val tab = currentTab ?: return
+        val session = tab.session ?: return
         tab.searchQuery = queryText
-        tab.session.abortSearch()
+        session.abortSearch()
         tab.searchJob?.cancel()
 
         if (queryText.isBlank()) {
@@ -246,7 +269,7 @@ fun UmbrixMainScreen(
             tab.isFilteredView = false
             tab.selectedMatchColumn = -1
             searchErrorMessage = null
-            tab.session.trimWorkingSet()
+            session.trimWorkingSet()
             return
         }
 
@@ -267,7 +290,8 @@ fun UmbrixMainScreen(
                 "regex:$flags\\b" + com.google.re2j.Pattern.quote(queryText) + "\\b"
             }
             tab.isSearchMatchCase -> {
-                "case:sensitive \"${queryText.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+                val raw = queryText.removeSurrounding("\"")
+                "case:sensitive \"${raw.replace("\\", "\\\\").replace("\"", "\\\"")}\""
             }
             else -> queryText
         }
@@ -281,7 +305,7 @@ fun UmbrixMainScreen(
                 var hasJumpedToFirstMatch = false
 
                 val parseAndSearchResult: scala.util.Either<QueryParseError, SearchResult> = kotlinx.coroutines.runInterruptible(Dispatchers.Default) {
-                    tab.session.searchProgressive(effectiveQuery) { rawPartialResult: SearchResult ->
+                    session.searchProgressive(effectiveQuery) { rawPartialResult: SearchResult ->
                         if (tab.searchQuery == queryText) {
                             val partialResult = if (tab.isTemporalFocusActive) {
                                 rawPartialResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
@@ -301,7 +325,7 @@ fun UmbrixMainScreen(
                                             hasJumpedToFirstMatch = true
                                             val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                             if (tab.isFilteredView) {
-                                                val filteredView = tab.session.createFilteredView(partialResult.matchingLines())
+                                                val filteredView = session.createFilteredView(partialResult.matchingLines())
                                                 val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                                 val intervals = findNeedleIntervals(
                                                     lineText,
@@ -315,7 +339,7 @@ fun UmbrixMainScreen(
                                                 tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                                 tab.searchNavigationGeneration++
                                             } else {
-                                                val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                                val lineText = try { session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                                 val intervals = findNeedleIntervals(
                                                     lineText,
                                                     needles,
@@ -330,7 +354,7 @@ fun UmbrixMainScreen(
                                                     val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
                                                     tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                                                 } else {
-                                                    val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                                    val maxTop = maxOf(0L, (session.totalLines() as Number).toLong() - tab.visibleRowCount)
                                                     tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
                                                 }
                                                 tab.selectedLineIndex = firstLine
@@ -374,7 +398,7 @@ fun UmbrixMainScreen(
                                     if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
                                         val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                         if (tab.isFilteredView) {
-                                            val filteredView = tab.session.createFilteredView(searchResult.matchingLines())
+                                            val filteredView = session.createFilteredView(searchResult.matchingLines())
                                             val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                             val intervals = findNeedleIntervals(
                                                 lineText,
@@ -388,7 +412,7 @@ fun UmbrixMainScreen(
                                             tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                             tab.searchNavigationGeneration++
                                         } else {
-                                            val lineText = try { tab.session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                            val lineText = try { session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                             val intervals = findNeedleIntervals(
                                                 lineText,
                                                 needles,
@@ -403,7 +427,7 @@ fun UmbrixMainScreen(
                                                 val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
                                                 tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                                             } else {
-                                                val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                                                val maxTop = maxOf(0L, (session.totalLines() as Number).toLong() - tab.visibleRowCount)
                                                 tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
                                             }
                                             tab.selectedLineIndex = firstLine
@@ -422,8 +446,8 @@ fun UmbrixMainScreen(
                 if (ForensicErrorReportGenerator.isFatal(e)) throw e
                 val context = ForensicReportContext.fromSession(
                     tab.filePath,
-                    tab.session.fileSizeBytes(),
-                    (tab.session.totalLines() as Number).toLong(),
+                    session.fileSizeBytes(),
+                    (session.totalLines() as Number).toLong(),
                     tab.topVisibleLine
                 )
                 WorkstationErrorHandler.reportException(e, context)
@@ -432,7 +456,7 @@ fun UmbrixMainScreen(
                 if (tab.searchQuery == queryText) {
                     tab.isSearching = false
                 }
-                tab.session.trimWorkingSet()
+                session.trimWorkingSet()
             }
         }
     }
@@ -440,6 +464,7 @@ fun UmbrixMainScreen(
     fun navigateSearch(forward: Boolean) {
         try {
             val tab = currentTab ?: return
+            val session = tab.session ?: return
             val result = tab.searchResult ?: return
             if (result.isEmpty()) return
 
@@ -449,7 +474,7 @@ fun UmbrixMainScreen(
             if (tab.isFilteredView) {
                 val totalFiltered = result.totalMatches()
                 if (totalFiltered <= 0L) return
-                val filteredView = tab.session.createFilteredView(result.matchingLines())
+                val filteredView = session.createFilteredView(result.matchingLines())
 
                 fun getFilteredLineIntervals(vLine: Long): List<Pair<Int, Int>> {
                     if (vLine < 0L || vLine >= totalFiltered) return emptyList()
@@ -525,12 +550,12 @@ fun UmbrixMainScreen(
             } else {
                 val isTemporal = tab.isTemporalFocusActive
                 val minLine = if (isTemporal) tab.temporalFocusStartLine else 0L
-                val maxLine = if (isTemporal) tab.temporalFocusEndLine else ((tab.session.totalLines() as Number).toLong() - 1L)
+                val maxLine = if (isTemporal) tab.temporalFocusEndLine else ((session.totalLines() as Number).toLong() - 1L)
 
                 fun getLineIntervals(line: Long): List<Pair<Int, Int>> {
-                    if (line < 0L || line >= (tab.session.totalLines() as Number).toLong()) return emptyList()
+                    if (line < 0L || line >= (session.totalLines() as Number).toLong()) return emptyList()
                     val lineText = try {
-                        tab.session.getLineText(line, ViewportState.MAX_SHAPED_CHARS)
+                        session.getLineText(line, ViewportState.MAX_SHAPED_CHARS)
                     } catch (_: Exception) { "" }
                     return findNeedleIntervals(
                         lineText,
@@ -554,7 +579,7 @@ fun UmbrixMainScreen(
                         val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
                         tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                     } else {
-                        val maxTop = maxOf(0L, (tab.session.totalLines() as Number).toLong() - tab.visibleRowCount)
+                        val maxTop = maxOf(0L, (session.totalLines() as Number).toLong() - tab.visibleRowCount)
                         tab.topVisibleLine = (targetLine - halfVisible).coerceIn(0L, maxTop)
                     }
                     tab.selectedLineIndex = targetLine
@@ -616,7 +641,7 @@ fun UmbrixMainScreen(
     fun navigateAnomaly(forward: Boolean) {
         try {
             val tab = currentTab ?: return
-            val session = tab.session
+            val session = tab.session ?: return
             val currentLine = tab.topVisibleLine
             val targetLine = if (forward) {
                 val next = session.findNextAnomaly(currentLine)
@@ -641,6 +666,7 @@ fun UmbrixMainScreen(
 
     fun exportSubFile() {
         val tab = currentTab ?: return
+        val session = tab.session ?: return
         val defaultName = "excerpt_${File(tab.filePath).nameWithoutExtension}.log"
         val destinationPath = showNativeSaveFileDialog(defaultName) ?: return
 
@@ -650,24 +676,28 @@ fun UmbrixMainScreen(
                 val sliceResult = withContext(Dispatchers.IO) {
                     val targetFile = File(destinationPath)
                     if (tab.isFilteredView && tab.searchResult != null) {
-                        tab.session.exportFilteredLines(tab.searchResult!!.matchingLines(), targetFile.toPath())
+                        session.exportFilteredLines(tab.searchResult!!.matchingLines(), targetFile.toPath())
                     } else {
-                        val endLine = (tab.topVisibleLine + 1000L).coerceAtMost((tab.session.totalLines() as Number).toLong() - 1L)
-                        tab.session.exportContiguousRange(tab.topVisibleLine, endLine, targetFile.toPath())
+                        val endLine = (tab.topVisibleLine + 1000L).coerceAtMost((session.totalLines() as Number).toLong() - 1L)
+                        session.exportContiguousRange(tab.topVisibleLine, endLine, targetFile.toPath())
                     }
                 }
 
                 statusMessageText = "Exported ${sliceResult.linesExported()} lines (${formatByteSize(sliceResult.bytesWritten())}) in ${sliceResult.durationNanos() / 1_000_000L} ms. Opening in new tab..."
+                ToastManager.success("Exported sub-file: ${File(destinationPath).name} (${formatByteSize(sliceResult.bytesWritten())})")
                 // Automatically open as a new tab
                 loadLogFile(destinationPath, asNewTab = true)
             } catch (e: Throwable) {
                 if (ForensicErrorReportGenerator.isFatal(e)) throw e
-                val context = ForensicReportContext.fromSession(
-                    tab.filePath,
-                    tab.session.fileSizeBytes(),
-                    (tab.session.totalLines() as Number).toLong(),
-                    tab.topVisibleLine
-                )
+                val session = tab.session
+                val context = if (session != null) {
+                    ForensicReportContext.fromSession(
+                        tab.filePath,
+                        session.fileSizeBytes(),
+                        (session.totalLines() as Number).toLong(),
+                        tab.topVisibleLine
+                    )
+                } else ForensicReportContext.empty()
                 WorkstationErrorHandler.reportException(e, context)
                 statusMessageText = "Export failed: ${e.message}"
             }
@@ -683,8 +713,9 @@ fun UmbrixMainScreen(
 
     fun generateDiagnosticReport() {
         val tab = currentTab
-        val context = if (tab != null) {
-            ForensicReportContext.fromSession(tab.filePath, tab.session.fileSizeBytes(), (tab.session.totalLines() as Number).toLong(), tab.topVisibleLine)
+        val session = tab?.session
+        val context = if (tab != null && session != null) {
+            ForensicReportContext.fromSession(tab.filePath, session.fileSizeBytes(), (session.totalLines() as Number).toLong(), tab.topVisibleLine)
         } else {
             ForensicReportContext.empty()
         }
@@ -696,37 +727,89 @@ fun UmbrixMainScreen(
     /** Central dispatcher for every action emitted by the title bar hamburger menu. */
     fun handleMenuAction(action: MenuAction) {
         try {
+            val tab = openTabs.getOrNull(activeTabIndex)
+            val session = tab?.session
             val updatedSettings = MenuSettingsReducer.reduce(action, SettingsManager.currentSettings)
             if (updatedSettings != null) {
                 SettingsManager.updateSettings(updatedSettings)
             }
             when (action) {
                 is MenuAction.OpenFile -> openFileViaNativeDialog()
+                is MenuAction.NewScratchpad -> {
+                    val s = scratchpadManager.createSession()
+                    val newTab = WorkspaceTab(
+                        session = null,
+                        filePath = "scratch://${s.title}",
+                        scratchpadSession = s
+                    )
+                    openTabs.add(newTab)
+                    activeTabIndex = openTabs.size - 1
+                    statusMessageText = "Opened new scratchpad ${s.title}"
+                    ToastManager.info("Opened new scratchpad ${s.title}")
+                }
                 is MenuAction.OpenRecentFile -> loadLogFile(action.path, asNewTab = true)
                 is MenuAction.ClearRecentFiles -> statusMessageText = "Cleared recent files."
                 is MenuAction.ExportSubFile -> {
-                    if (activeSession != null) {
+                    if (session != null && tab != null) {
                         isExportDialogVisible = true
                     } else {
+                        ToastManager.warn("Open a log file to export sub-files.")
                         statusMessageText = "Open a log file to export sub-files."
                     }
+                }
+                is MenuAction.CommandPalette -> {
+                    isCommandPaletteVisible = true
+                    commandPaletteInitialQuery = ""
                 }
                 is MenuAction.Find -> {
                     isSearchBarVisible = true
                     searchFocusTrigger++
                 }
                 is MenuAction.GoToLineTimestamp -> {
-                    if (activeSession != null) {
+                    if (session != null && tab != null) {
                         isGoToLineDialogVisible = true
                     } else {
+                        ToastManager.warn("Open a log file to use Go To Line / Timestamp.")
                         statusMessageText = "Open a log file to use Go To Line / Timestamp."
                     }
                 }
-                is MenuAction.TemporalRange -> {
-                    val tab = currentTab
+                is MenuAction.ToggleTimelineDrawer -> {
+                    isTimelineDrawerOpen = !isTimelineDrawerOpen
+                }
+                is MenuAction.ManageBookmarks -> {
                     if (tab != null) {
+                        isBookmarkDialogOpen = true
+                    } else {
+                        ToastManager.warn("Open a log file or scratchpad to view bookmarks.")
+                        statusMessageText = "Open a log file to view bookmarks."
+                    }
+                }
+                is MenuAction.ToggleBookmarkFilter -> {
+                    if (tab != null) {
+                        if (tab.bookmarkManager.bookmarks.isEmpty()) {
+                            ToastManager.info("No bookmarks in ${tab.title} to filter")
+                        } else {
+                            tab.isBookmarkFilterActive = !tab.isBookmarkFilterActive
+                            val msg = if (tab.isBookmarkFilterActive) {
+                                "Filtered view to ${tab.bookmarkManager.bookmarks.size} bookmarks in ${tab.title}"
+                            } else {
+                                "Restored full view in ${tab.title}"
+                            }
+                            statusMessageText = msg
+                            ToastManager.info(msg)
+                        }
+                    } else {
+                        ToastManager.warn("Open a log file to use bookmark filtering.")
+                    }
+                }
+                is MenuAction.TemporalRange -> {
+                    if (tab != null && session != null) {
+                        if (!session.isTemporalDataAvailable) {
+                            ToastManager.info("No temporal timestamps detected in ${tab.title}")
+                        }
                         tab.isTimeScrubberOpen = !tab.isTimeScrubberOpen
                     } else {
+                        ToastManager.warn("Open a log file to use the temporal range scrubber.")
                         statusMessageText = "Open a log file to use the temporal range scrubber."
                     }
                 }
@@ -751,12 +834,63 @@ fun UmbrixMainScreen(
         menuActions.collect { menuAction -> latestMenuActionHandler(menuAction) }
     }
 
-    DisposableEffect(isSearchBarVisible, isGoToLineDialogVisible, isSettingsDialogVisible, isAboutDialogVisible, isShortcutsDialogVisible, isExportDialogVisible, currentTab, activeTabIndex) {
+    DisposableEffect(isSearchBarVisible, isGoToLineDialogVisible, isSettingsDialogVisible, isAboutDialogVisible, isShortcutsDialogVisible, isExportDialogVisible, isCommandPaletteVisible, currentTab, activeTabIndex) {
         WorkstationKeyDispatcher.onGlobalKeyEvent = { keyEvent ->
             if (keyEvent.type == KeyEventType.KeyDown) {
                 val isCtrlOrCmd = keyEvent.isCtrlPressed || keyEvent.isMetaPressed
-                when {
-                    keyEvent.key == Key.F1 || (isCtrlOrCmd && keyEvent.key == Key.Slash) -> {
+
+                // Track Double Shift for IntelliJ Search Everywhere trigger
+                val isDoubleShift = if ((keyEvent.key == Key.ShiftLeft || keyEvent.key == Key.ShiftRight) && !isCtrlOrCmd && !keyEvent.isAltPressed) {
+                    if (SettingsManager.currentSettings.enableDoubleShiftTrigger) {
+                        val now = System.currentTimeMillis()
+                        if (now - lastShiftPressTimeMs in 1..400L) {
+                            lastShiftPressTimeMs = 0L
+                            true
+                        } else {
+                            lastShiftPressTimeMs = now
+                            false
+                        }
+                    } else false
+                } else {
+                    if (keyEvent.key != Key.ShiftLeft && keyEvent.key != Key.ShiftRight) {
+                        lastShiftPressTimeMs = 0L
+                    }
+                    false
+                }
+
+                if (isDoubleShift) {
+                    isCommandPaletteVisible = true
+                    commandPaletteInitialQuery = ""
+                    true
+                } else {
+                    when {
+                        // Command Palette: VS Code Ctrl+Shift+P / Cmd+Shift+P (Actions prompt)
+                        isCtrlOrCmd && keyEvent.isShiftPressed && keyEvent.key == Key.P -> {
+                            isCommandPaletteVisible = true
+                            commandPaletteInitialQuery = ">"
+                            true
+                        }
+                        // Command Palette: VS Code Ctrl+P / Cmd+P (Quick Open Files / Omni)
+                        isCtrlOrCmd && !keyEvent.isShiftPressed && keyEvent.key == Key.P -> {
+                            isCommandPaletteVisible = true
+                            commandPaletteInitialQuery = ""
+                            true
+                        }
+                        // Command Palette: IntelliJ Ctrl+Shift+A / Cmd+Shift+A (Find Action)
+                        isCtrlOrCmd && keyEvent.isShiftPressed && keyEvent.key == Key.A -> {
+                            isCommandPaletteVisible = true
+                            commandPaletteInitialQuery = ">"
+                            true
+                        }
+                        // Command Palette: Vim Normal Mode ':' trigger
+                        !isCtrlOrCmd && !keyEvent.isAltPressed && keyEvent.isShiftPressed && keyEvent.key == Key.Semicolon &&
+                            SettingsManager.currentSettings.enableVimColonTrigger &&
+                            !isSearchBarVisible && !isCommandPaletteVisible && !isSettingsDialogVisible && !isGoToLineDialogVisible && !isAboutDialogVisible && !isShortcutsDialogVisible && !isExportDialogVisible -> {
+                            isCommandPaletteVisible = true
+                            commandPaletteInitialQuery = ":"
+                            true
+                        }
+                        keyEvent.key == Key.F1 || (isCtrlOrCmd && keyEvent.key == Key.Slash) -> {
                         isShortcutsDialogVisible = true
                         true
                     }
@@ -787,6 +921,14 @@ fun UmbrixMainScreen(
                         SettingsManager.updateSettings(current.copy(editorFontSizePt = FontSpec.DEFAULT_FONT_SIZE))
                         true
                     }
+                    isCtrlOrCmd && keyEvent.isAltPressed && keyEvent.key == Key.B -> {
+                        handleMenuAction(MenuAction.ToggleBookmarkFilter)
+                        true
+                    }
+                    isCtrlOrCmd && !keyEvent.isShiftPressed && !keyEvent.isAltPressed && keyEvent.key == Key.N -> {
+                        handleMenuAction(MenuAction.NewScratchpad)
+                        true
+                    }
                     isCtrlOrCmd && keyEvent.key == Key.O -> {
                         openFileViaNativeDialog()
                         true
@@ -811,50 +953,107 @@ fun UmbrixMainScreen(
                     }
                     isCtrlOrCmd && keyEvent.key == Key.C -> {
                         val tab = currentTab
-                        if (tab != null) {
+                        val session = activeSession
+                        if (tab != null && session != null) {
                             if (tab.selectionState.hasSelection()) {
                                 try {
                                     val filteredView = if (tab.isFilteredView && tab.searchResult != null) {
-                                        tab.session.createFilteredView(tab.searchResult!!.matchingLines())
+                                        session.createFilteredView(tab.searchResult!!.matchingLines())
                                     } else null
                                     val temporalStart = if (filteredView == null && tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
                                     val virtualLineCount = when {
-                                        filteredView != null -> filteredView.totalFilteredLines()
+                                        filteredView != null -> (filteredView.totalFilteredLines() as Number).toLong()
                                         tab.isTemporalFocusActive -> (tab.temporalFocusEndLine - temporalStart + 1L).coerceAtLeast(0L)
-                                        else -> tab.session.totalLines()
+                                        else -> (session.totalLines() as Number).toLong()
                                     }
                                     val selectedText = tab.selectionState.extractSelectedText(virtualLineCount, { virtualRow ->
                                         val physicalLine = filteredView?.physicalLineForVirtualIndex(virtualRow) ?: temporalStart + virtualRow
-                                        tab.session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
+                                        session.getLineText(physicalLine, ViewportState.MAX_SHAPED_CHARS)
                                     })
                                     if (selectedText.isNotEmpty()) {
                                         val selection = StringSelection(selectedText)
                                         Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
                                         statusMessageText = "Copied ${formatNumberWithCommas(selectedText.length.toLong())} characters to clipboard."
+                                        ToastManager.success("Copied ${formatNumberWithCommas(selectedText.length.toLong())} characters to clipboard.")
                                     }
-                                } catch (_: SelectionTooLargeException) {
+                                } catch (e: SelectionTooLargeException) {
                                     statusMessageText = "Selection too large to copy (limit: 1 MiB or 8,192 rows)."
-                                } catch (_: Exception) {
+                                    ToastManager.warn("Selection too large to copy (limit: 1 MiB or 8,192 rows).")
+                                } catch (e: Exception) {
                                     statusMessageText = "Could not copy the selected log text."
+                                    ToastManager.error("Could not copy the selected log text.")
                                 }
                                 true
                             } else {
                                 val selectedLine = tab.selectedLineIndex
                                 if (selectedLine != null && selectedLine >= 0L) {
                                     val lineText = try {
-                                        tab.session.getLineText(selectedLine, ViewportState.MAX_SHAPED_CHARS)
-                                    } catch (_: Exception) { "" }
+                                        session.getLineText(selectedLine, ViewportState.MAX_SHAPED_CHARS)
+                                    } catch (e: Exception) { "" }
 
                                     if (lineText.isNotEmpty()) {
                                         try {
                                             val selection = StringSelection(lineText)
                                             Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
                                             statusMessageText = "Copied line ${formatNumberWithCommas(selectedLine + 1L)} to clipboard."
+                                            ToastManager.success("Copied line ${formatNumberWithCommas(selectedLine + 1L)} to clipboard.")
                                         } catch (_: Throwable) {}
                                     }
                                     true
                                 } else false
                             }
+                        } else false
+                    }
+                    isCtrlOrCmd && keyEvent.isShiftPressed && keyEvent.key == Key.T -> {
+                        isTimelineDrawerOpen = !isTimelineDrawerOpen
+                        true
+                    }
+                    isCtrlOrCmd && keyEvent.key == Key.N -> {
+                        val s = scratchpadManager.createSession()
+                        val newTab = WorkspaceTab(
+                            session = null,
+                            filePath = "scratch://${s.title}",
+                            scratchpadSession = s
+                        )
+                        openTabs.add(newTab)
+                        activeTabIndex = openTabs.size - 1
+                        ToastManager.info("Created ${s.title}")
+                        true
+                    }
+                    isCtrlOrCmd && keyEvent.key == Key.B -> {
+                        val tab = currentTab
+                        val session = activeSession
+                        if (tab != null && session != null) {
+                            val line = tab.selectedLineIndex ?: tab.topVisibleLine
+                            val text = try { session.getLineText(line, 4096) } catch (e: Exception) { "" }
+                            val ts = if (session.isTemporalDataAvailable) {
+                                try {
+                                    val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(line)
+                                    (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                                } catch (e: Exception) { 0L }
+                            } else 0L
+                            val added = tab.bookmarkManager.toggle(line, ts, text)
+                            if (added) ToastManager.info("Bookmarked line ${line + 1}")
+                            else ToastManager.info("Removed bookmark on line ${line + 1}")
+                            true
+                        } else false
+                    }
+                    keyEvent.key == Key.F2 -> {
+                        val tab = currentTab
+                        if (tab != null) {
+                            val target = if (keyEvent.isShiftPressed) {
+                                tab.bookmarkManager.previousBookmark(tab.selectedLineIndex ?: tab.topVisibleLine)
+                            } else {
+                                tab.bookmarkManager.nextBookmark(tab.selectedLineIndex ?: tab.topVisibleLine)
+                            }
+                            if (target != null) {
+                                tab.selectedLineIndex = target
+                                tab.topVisibleLine = (target - 10).coerceAtLeast(0L)
+                                ToastManager.info("Jumped to bookmark on line ${target + 1}")
+                            } else {
+                                ToastManager.info("No bookmarks in this document")
+                            }
+                            true
                         } else false
                     }
                     keyEvent.key == Key.F3 -> {
@@ -866,7 +1065,11 @@ fun UmbrixMainScreen(
                         true
                     }
                     keyEvent.key == Key.Escape -> {
-                        if (isSettingsDialogVisible) {
+                        if (isCommandPaletteVisible) {
+                            isCommandPaletteVisible = false
+                            commandPaletteInitialQuery = ""
+                            true
+                        } else if (isSettingsDialogVisible) {
                             onSetSettingsDialogVisible(false)
                             true
                         } else if (isGoToLineDialogVisible) {
@@ -891,15 +1094,16 @@ fun UmbrixMainScreen(
                     }
                     else -> false
                 }
-            } else false
+            }
+        } else false
         }
         onDispose {
             WorkstationKeyDispatcher.onGlobalKeyEvent = null
         }
     }
 
-    LaunchedEffect(currentTab, currentTab?.session?.totalLines()) {
-        onActiveDocTitleChange(currentTab?.let { File(it.filePath).name })
+    LaunchedEffect(currentTab, currentTab?.title, currentTab?.session?.totalLines()) {
+        onActiveDocTitleChange(currentTab?.title)
     }
 
     LaunchedEffect(Unit) {
@@ -940,9 +1144,33 @@ fun UmbrixMainScreen(
             onSelectTab = { index -> activeTabIndex = index },
             onCloseTab = { index -> closeTab(index) },
             onNewTabClicked = {
-                val chosenPath = showNativeOpenFileDialog()
-                if (chosenPath != null) {
-                    loadLogFile(chosenPath, asNewTab = true)
+                val s = scratchpadManager.createSession()
+                val newTab = WorkspaceTab(
+                    session = null,
+                    filePath = "scratch://${s.title}",
+                    scratchpadSession = s
+                )
+                openTabs.add(newTab)
+                activeTabIndex = openTabs.size - 1
+                statusMessageText = "Opened new scratchpad ${s.title}"
+                ToastManager.info("Opened new scratchpad ${s.title}")
+            },
+            onOpenFile = { openFileViaNativeDialog() },
+            onCloseOtherTabs = { keepIndex ->
+                if (keepIndex in openTabs.indices) {
+                    val keepTab = openTabs[keepIndex]
+                    val toClose = openTabs.filterIndexed { idx, _ -> idx != keepIndex }
+                    openTabs.clear()
+                    openTabs.add(keepTab)
+                    activeTabIndex = 0
+                    coroutineScope.launch(Dispatchers.IO) {
+                        toClose.forEach { it.session?.close() }
+                    }
+                }
+            },
+            onCloseAllTabs = {
+                while (openTabs.isNotEmpty()) {
+                    closeTab(0)
                 }
             }
         )
@@ -984,11 +1212,14 @@ fun UmbrixMainScreen(
                     }
                 },
                 isFilteredView = currentTab?.isFilteredView ?: false,
+                isBookmarkFilterActive = currentTab?.isBookmarkFilterActive ?: false,
+                bookmarkCount = currentTab?.bookmarkManager?.bookmarks?.size ?: 0,
+                onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) },
                 onToggleFilterView = {
                     currentTab?.let { tab ->
                         val searchResult = tab.searchResult
-                        if (searchResult != null && !searchResult.isEmpty) {
-                            val session = tab.session
+                        val session = tab.session
+                        if (searchResult != null && !searchResult.isEmpty && session != null) {
                             if (!tab.isFilteredView) {
                                 val currentPhysical = tab.selectedLineIndex ?: tab.topVisibleLine
                                 val filteredView = session.createFilteredView(searchResult.matchingLines())
@@ -1062,13 +1293,133 @@ fun UmbrixMainScreen(
 
         Divider(Orientation.Horizontal)
 
-        // --- Center Log Viewport Canvas ---
-        LogViewportCanvas(
-            tab = currentTab,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        )
+        // --- Center Log Viewport Canvas or Welcome Screen ---
+        if (openTabs.isEmpty() || currentTab == null) {
+            WelcomeScreen(
+                onOpenFileClicked = {
+                    val chosenPath = showNativeOpenFileDialog()
+                    if (chosenPath != null) {
+                        loadLogFile(chosenPath, asNewTab = true)
+                    }
+                },
+                onSelectRecentFile = { recentPath ->
+                    loadLogFile(recentPath, asNewTab = true)
+                },
+                onClearRecentFiles = {
+                    SettingsManager.clearRecentFiles()
+                    ToastManager.info("Recent file history cleared.")
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            )
+        } else if (currentTab.isScratchpad) {
+            ScratchpadEditorCanvas(
+                session = currentTab.scratchpadSession!!,
+                onSaveRequested = {
+                    ToastManager.success("Saved ${currentTab.scratchpadSession!!.title}")
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            )
+        } else {
+            LogViewportCanvas(
+                tab = currentTab,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                onFilterByText = { text ->
+                    currentTab?.isFilteredView = true
+                    isSearchBarVisible = true
+                    triggerSearch(text, immediate = true)
+                },
+                onSearchText = { text ->
+                    isSearchBarVisible = true
+                    triggerSearch(text, immediate = true)
+                },
+                onSeekInScrubber = { line ->
+                    if (activeSession != null) {
+                        currentTab?.selectedLineIndex = line
+                        isGoToLineDialogVisible = true
+                    }
+                },
+                onExportStartingHere = { line ->
+                    if (activeSession != null) {
+                        currentTab?.selectedLineIndex = line
+                        isExportDialogVisible = true
+                    }
+                },
+                onAddToTimeline = { line, text ->
+                    val session = activeSession
+                    val ts = if (session != null && session.isTemporalDataAvailable) {
+                        try {
+                            val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(line)
+                            (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                        } catch (e: Exception) { 0L }
+                    } else 0L
+                    timelineManager.addEvent(
+                        sourceDocumentPath = currentTab.filePath,
+                        sourceDocumentTitle = File(currentTab.filePath).name,
+                        lineIndex = line,
+                        timestampMicros = ts,
+                        lineContent = text
+                    )
+                    ToastManager.success("Pinned Line ${line + 1} to Incident Timeline")
+                    isTimelineDrawerOpen = true
+                },
+                onAppendToScratchpad = { line, text ->
+                    val session = activeSession
+                    val ts = if (session != null && session.isTemporalDataAvailable) {
+                        try {
+                            val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(line)
+                            (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                        } catch (e: Exception) { 0L }
+                    } else 0L
+                    val scratchSession = scratchpadManager.appendToActiveOrNew(
+                        sourceTitle = File(currentTab.filePath).name,
+                        lineIndex = line,
+                        timestampMicros = ts,
+                        snippet = text
+                    )
+                    ToastManager.info("Appended to ${scratchSession.title}")
+                },
+                onNewScratchpadFromSelection = { text ->
+                    val s = scratchpadManager.createSession(text)
+                    val newTab = WorkspaceTab(
+                        session = null,
+                        filePath = "scratch://${s.title}",
+                        scratchpadSession = s
+                    )
+                    openTabs.add(newTab)
+                    activeTabIndex = openTabs.size - 1
+                    ToastManager.info("Opened new scratchpad ${s.title}")
+                },
+                onOpenFile = { openFileViaNativeDialog() },
+                onNewScratchpad = { handleMenuAction(MenuAction.NewScratchpad) },
+                onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) }
+            )
+        }
+
+        // --- Incident Timeline Drawer (Ctrl+Shift+T) ---
+        if (isTimelineDrawerOpen) {
+            Divider(Orientation.Horizontal)
+            InvestigationTimelineDrawer(
+                timelineManager = timelineManager,
+                onJumpToEvent = { event ->
+                    val targetTabIdx = openTabs.indexOfFirst { it.filePath == event.sourceDocumentPath }
+                    if (targetTabIdx >= 0) {
+                        activeTabIndex = targetTabIdx
+                        openTabs[targetTabIdx].selectedLineIndex = event.lineIndex
+                        openTabs[targetTabIdx].topVisibleLine = (event.lineIndex - 10).coerceAtLeast(0L)
+                    } else {
+                        loadLogFile(event.sourceDocumentPath, asNewTab = true)
+                    }
+                },
+                onOpenExportDialog = { isTimelineExportDialogOpen = true },
+                onCloseDrawer = { isTimelineDrawerOpen = false }
+            )
+        }
 
         Divider(Orientation.Horizontal)
 
@@ -1088,6 +1439,7 @@ fun UmbrixMainScreen(
         GoToTimestampDialog(
             session = activeSession,
             currentLine = currentTab?.selectedLineIndex ?: currentTab?.topVisibleLine ?: 0L,
+            documentTitle = currentTab?.title,
             onGoToLine = { targetLine ->
                 currentTab?.let { tab ->
                     if (tab.isTemporalFocusActive) {
@@ -1142,16 +1494,17 @@ fun UmbrixMainScreen(
     }
 
     // --- Standardized Export Sub-File Dialog (Ctrl+Shift+S) ---
-    if (isExportDialogVisible && activeSession != null) {
+    if (isExportDialogVisible && activeSession != null && currentTab != null) {
         ExportSubFileDialog(
             session = activeSession,
             currentLine = currentTab.selectedLineIndex ?: currentTab.topVisibleLine,
+            sourceFilePath = currentTab.filePath,
             onExportRequested = { startLine, endLine, destinationFile, _ ->
                 coroutineScope.launch {
                     try {
                         statusMessageText = "Exporting sub-file to ${destinationFile.absolutePath}..."
                         val sliceResult = withContext(Dispatchers.IO) {
-                            currentTab.session.exportContiguousRange(startLine, endLine, destinationFile.toPath())
+                            activeSession.exportContiguousRange(startLine, endLine, destinationFile.toPath())
                         }
                         statusMessageText = "Exported ${sliceResult.linesExported()} lines (${formatByteSize(sliceResult.bytesWritten())}) in ${sliceResult.durationNanos() / 1_000_000L} ms. Opening in new tab..."
                         loadLogFile(destinationFile.absolutePath, asNewTab = true)
@@ -1159,8 +1512,8 @@ fun UmbrixMainScreen(
                         if (ForensicErrorReportGenerator.isFatal(e)) throw e
                         val context = ForensicReportContext.fromSession(
                             currentTab.filePath,
-                            currentTab.session.fileSizeBytes(),
-                            (currentTab.session.totalLines() as Number).toLong(),
+                            activeSession.fileSizeBytes(),
+                            (activeSession.totalLines() as Number).toLong(),
                             currentTab.topVisibleLine
                         )
                         WorkstationErrorHandler.reportException(e, context)
@@ -1170,6 +1523,211 @@ fun UmbrixMainScreen(
             onDismiss = { isExportDialogVisible = false }
         )
     }
+
+    // --- Universal Multi-Persona Command Palette Modal Dialog ---
+    if (isCommandPaletteVisible) {
+        CommandPaletteDialog(
+            isVisible = isCommandPaletteVisible,
+            initialQuery = commandPaletteInitialQuery,
+            executionContext = CommandExecutionContext(
+                onOpenFile = { openFileViaNativeDialog() },
+                onOpenRecentFile = { path -> loadLogFile(path, asNewTab = true) },
+                onExportSubFile = {
+                    if (activeSession != null) {
+                        isExportDialogVisible = true
+                    } else {
+                        statusMessageText = "Open a log file to export sub-files."
+                    }
+                },
+                onGoToLine = {
+                    if (activeSession != null) {
+                        isGoToLineDialogVisible = true
+                    } else {
+                        statusMessageText = "Open a log file to use Go To Line."
+                    }
+                },
+                onJumpToDirectLine = { line ->
+                    currentTab?.let { tab ->
+                        tab.selectedLineIndex = line
+                        tab.topVisibleLine = (line - 10).coerceAtLeast(0L)
+                    }
+                },
+                onGoToTimestamp = {
+                    if (activeSession != null) {
+                        isGoToLineDialogVisible = true
+                    } else {
+                        statusMessageText = "Open a log file to use Go To Timestamp."
+                    }
+                },
+                onOpenSearch = {
+                    isSearchBarVisible = true
+                    searchFocusTrigger++
+                },
+                onClearSearch = {
+                    isSearchBarVisible = false
+                    triggerSearch("")
+                },
+                onNavigateSearch = { forward -> navigateSearch(forward) },
+                onNavigateAnomaly = { forward -> navigateAnomaly(forward) },
+                onOpenSettings = { onSetSettingsDialogVisible(true) },
+                onOpenShortcuts = { isShortcutsDialogVisible = true },
+                onOpenAbout = { isAboutDialogVisible = true },
+                onCaptureDiagnosticReport = { generateDiagnosticReport() },
+                onCloseCurrentTab = {
+                    if (activeTabIndex in openTabs.indices) {
+                        closeTab(activeTabIndex)
+                    }
+                },
+                onCloseAllTabs = {
+                    while (openTabs.isNotEmpty()) {
+                        closeTab(0)
+                    }
+                },
+                onNextTab = {
+                    if (openTabs.isNotEmpty()) {
+                        activeTabIndex = (activeTabIndex + 1) % openTabs.size
+                    }
+                },
+                onPrevTab = {
+                    if (openTabs.isNotEmpty()) {
+                        activeTabIndex = if (activeTabIndex - 1 < 0) openTabs.size - 1 else activeTabIndex - 1
+                    }
+                },
+                onSwitchToTab = { index ->
+                    if (index in openTabs.indices) {
+                        activeTabIndex = index
+                    }
+                },
+                onZoomIn = {
+                    val current = SettingsManager.currentSettings
+                    val updatedPt = (current.editorFontSizePt + 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                    SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+                },
+                onZoomOut = {
+                    val current = SettingsManager.currentSettings
+                    val updatedPt = (current.editorFontSizePt - 1.0f).coerceIn(FontSpec.MIN_FONT_SIZE, FontSpec.MAX_FONT_SIZE)
+                    SettingsManager.updateSettings(current.copy(editorFontSizePt = updatedPt))
+                },
+                onResetZoom = {
+                    val current = SettingsManager.currentSettings
+                    SettingsManager.updateSettings(current.copy(editorFontSizePt = FontSpec.DEFAULT_FONT_SIZE))
+                },
+                openTabTitles = openTabs.map { File(it.filePath).name },
+                activeTabIndex = activeTabIndex,
+                onToggleTimelineDrawer = { isTimelineDrawerOpen = !isTimelineDrawerOpen },
+                onSortTimelineChronologically = {
+                    timelineManager.sortChronologically()
+                    ToastManager.success("Timeline sorted chronologically")
+                },
+                onExportTimelineReport = { isTimelineExportDialogOpen = true },
+                onToggleBookmark = {
+                    val tab = currentTab
+                    val session = activeSession
+                    if (tab != null && session != null) {
+                        val line = tab.selectedLineIndex ?: tab.topVisibleLine
+                        val text = try { session.getLineText(line, 4096) } catch (e: Exception) { "" }
+                        val ts = if (session.isTemporalDataAvailable) {
+                            try {
+                                val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(line)
+                                (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                            } catch (e: Exception) { 0L }
+                        } else 0L
+                        val added = tab.bookmarkManager.toggle(line, ts, text)
+                        if (added) ToastManager.info("Bookmarked line ${line + 1}")
+                        else ToastManager.info("Removed bookmark on line ${line + 1}")
+                    }
+                },
+                onNextBookmark = {
+                    val tab = currentTab
+                    val target = tab?.bookmarkManager?.nextBookmark(tab.selectedLineIndex ?: tab.topVisibleLine)
+                    if (target != null) {
+                        tab.selectedLineIndex = target
+                        tab.topVisibleLine = (target - 10).coerceAtLeast(0L)
+                        ToastManager.info("Jumped to bookmark on line ${target + 1}")
+                    }
+                },
+                onPrevBookmark = {
+                    val tab = currentTab
+                    val target = tab?.bookmarkManager?.previousBookmark(tab.selectedLineIndex ?: tab.topVisibleLine)
+                    if (target != null) {
+                        tab.selectedLineIndex = target
+                        tab.topVisibleLine = (target - 10).coerceAtLeast(0L)
+                        ToastManager.info("Jumped to bookmark on line ${target + 1}")
+                    }
+                },
+                onOpenBookmarkManager = { isBookmarkDialogOpen = true },
+                onNewScratchpad = {
+                    val s = scratchpadManager.createSession()
+                    val newTab = WorkspaceTab(
+                        session = null,
+                        filePath = "scratch://${s.title}",
+                        scratchpadSession = s
+                    )
+                    openTabs.add(newTab)
+                    activeTabIndex = openTabs.size - 1
+                    ToastManager.info("Created ${s.title}")
+                },
+                onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) },
+                onExpandAllEvents = {
+                    currentTab?.expandAllEvents()
+                    ToastManager.info("Expanded all multi-line events in active tab")
+                },
+                onCollapseAllEvents = {
+                    currentTab?.collapseAllEvents()
+                    ToastManager.info("Collapsed all multi-line events in active tab")
+                }
+            ),
+            onDismiss = {
+                isCommandPaletteVisible = false
+                commandPaletteInitialQuery = ""
+            }
+        )
+    }
+
+    // --- Bookmarks Manager Modal Dialog ---
+    if (isBookmarkDialogOpen && currentTab != null) {
+        BookmarkManagerDialog(
+            bookmarkManager = currentTab.bookmarkManager,
+            documentTitle = currentTab.title,
+            onJumpToLine = { targetLine ->
+                currentTab.selectedLineIndex = targetLine
+                currentTab.topVisibleLine = (targetLine - 10).coerceAtLeast(0L)
+            },
+            onAddToTimeline = { bm ->
+                timelineManager.addEvent(
+                    sourceDocumentPath = currentTab.filePath,
+                    sourceDocumentTitle = currentTab.title,
+                    lineIndex = bm.lineIndex,
+                    timestampMicros = bm.timestampMicros,
+                    lineContent = bm.lineSnippet,
+                    tag = EventTag.fromString(bm.tag.name),
+                    userNote = bm.note
+                )
+                ToastManager.success("Added bookmark to Timeline")
+                isTimelineDrawerOpen = true
+            },
+            onDismiss = { isBookmarkDialogOpen = false },
+            isBookmarkFilterActive = currentTab.isBookmarkFilterActive,
+            onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) }
+        )
+    }
+
+    // --- Timeline Report Export Modal Dialog ---
+    if (isTimelineExportDialogOpen) {
+        TimelineExportDialog(
+            events = timelineManager.events,
+            onCopyToClipboard = { content ->
+                val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                val sel = StringSelection(content)
+                clipboard.setContents(sel, sel)
+                ToastManager.success("Incident Report copied to clipboard")
+            },
+            onDismiss = { isTimelineExportDialogOpen = false }
+        )
+    }
+
+    // --- Floating Toast Notifications Host ---
+    ToastHost(modifier = Modifier.fillMaxSize())
 }
 }
 

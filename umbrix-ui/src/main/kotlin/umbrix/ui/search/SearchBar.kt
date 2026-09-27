@@ -72,6 +72,9 @@ fun SearchBar(
     onToggleRegex: () -> Unit = {},
     isFilteredView: Boolean,
     onToggleFilterView: () -> Unit,
+    isBookmarkFilterActive: Boolean = false,
+    bookmarkCount: Int = 0,
+    onToggleBookmarkFilter: () -> Unit = {},
     onNavigateNext: () -> Unit,
     onNavigatePrev: () -> Unit,
     onExportSubFile: () -> Unit,
@@ -231,6 +234,25 @@ fun SearchBar(
                 enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
             ) {
                 Text(if (isFilteredView) "☰ Show All Lines" else "⬡ Filter Matching Lines")
+            }
+        }
+
+        // Bookmark Filter Toggle Button
+        if (bookmarkCount > 0 || isBookmarkFilterActive) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Tooltip(
+                tooltip = {
+                    Text(if (isBookmarkFilterActive) "Show All Lines — Exit bookmark filter" else "Filter Bookmarks — Show only bookmarked lines ($bookmarkCount)")
+                }
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onToggleBookmarkFilter()
+                        try { focusRequester.requestFocus() } catch (_: Throwable) {}
+                    }
+                ) {
+                    Text(if (isBookmarkFilterActive) "☰ Show All Lines" else "📌 Bookmarks ($bookmarkCount)")
+                }
             }
         }
 

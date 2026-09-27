@@ -61,12 +61,35 @@ object SettingsManager {
     }
 
     private fun persistSettings(settings: WorkstationSettings) {
+        val parentDir = settingsFile.parentFile ?: File(".")
+        if (!parentDir.exists()) {
+            parentDir.mkdirs()
+        }
+        val tmpFile = File(parentDir, ".settings.json.tmp")
         try {
             val json = buildSettingsJson(settings)
-            settingsFile.writeText(json, Charsets.UTF_8)
+            tmpFile.writeText(json, Charsets.UTF_8)
+            try {
+                java.nio.file.Files.move(
+                    tmpFile.toPath(),
+                    settingsFile.toPath(),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(
+                    tmpFile.toPath(),
+                    settingsFile.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING
+                )
+            }
             logger.info("Persisted workstation settings to {}", settingsFile.absolutePath)
         } catch (e: Throwable) {
             logger.error("Failed to persist settings to {}: {}", settingsFile.absolutePath, e.message)
+        } finally {
+            if (tmpFile.exists()) {
+                tmpFile.delete()
+            }
         }
     }
 
@@ -97,6 +120,17 @@ object SettingsManager {
         var showWhitespaceChars = false
         var recentFiles = emptyList<String>()
 
+        var statusBarShowPosition = true
+        var statusBarShowDocumentStats = true
+        var statusBarShowMode = true
+        var statusBarShowIndexingDetails = false
+        var statusBarShowMemory = false
+
+        var commandPaletteStyle = CommandPaletteStyle.OMNI
+        var commandPaletteShowShortcuts = true
+        var enableVimColonTrigger = true
+        var enableDoubleShiftTrigger = true
+
         val lines = json.lines()
         for (line in lines) {
             val trimmed = line.trim().trimEnd(',')
@@ -106,14 +140,14 @@ object SettingsManager {
                 val value = trimmed.substring(colonIdx + 1).trim().trim('"')
                 when (key) {
                     "themeName" -> themeName = value
-                    "isMinimapEnabled" -> isMinimapEnabled = value.toBooleanStrictOrNull() ?: true
+                    "isMinimapEnabled", "isMinimapVisible" -> isMinimapEnabled = value.toBooleanStrictOrNull() ?: true
                     "minimapWidthDp" -> minimapWidthDp = value.toIntOrNull()?.coerceIn(24, 120) ?: 48
                     "isSearchHighlightingEnabled" -> isSearchHighlightingEnabled = value.toBooleanStrictOrNull() ?: true
-                    "activeLanguageProfileId" -> activeLanguageProfileId = value
+                    "activeLanguageProfileId", "languageProfile" -> activeLanguageProfileId = value
                     "customErrorKeywords" -> customErrorKeywords = value
                     "customWarnKeywords" -> customWarnKeywords = value
                     "maxShapedCharsPerLine" -> maxShapedCharsPerLine = value.toIntOrNull()?.coerceIn(512, 16384) ?: 4096
-                    "enableSimdAcceleration" -> enableSimdAcceleration = value.toBooleanStrictOrNull() ?: true
+                    "enableSimdAcceleration", "isSimdEnabled" -> enableSimdAcceleration = value.toBooleanStrictOrNull() ?: true
                     "isLatencyGapHighlightingEnabled" -> isLatencyGapHighlightingEnabled = value.toBooleanStrictOrNull() ?: true
                     "latencyGapThresholdMs" -> latencyGapThresholdMs = value.toLongOrNull()?.coerceIn(10L, 60000L) ?: 1000L
                     "latencyGapSevereThresholdMs" -> latencyGapSevereThresholdMs = value.toLongOrNull()?.coerceIn(50L, 300000L) ?: 5000L
@@ -126,7 +160,16 @@ object SettingsManager {
                     "enableLigatures" -> enableLigatures = value.toBooleanStrictOrNull() ?: true
                     "viewportMode" -> viewportMode = ViewportLayoutMode.fromId(value) ?: ViewportLayoutMode.EXPANDABLE
                     "showLineNumbers" -> showLineNumbers = value.toBooleanStrictOrNull() ?: true
-                    "showWhitespaceChars" -> showWhitespaceChars = value.toBooleanStrictOrNull() ?: false
+                    "showWhitespaceChars", "showWhitespace" -> showWhitespaceChars = value.toBooleanStrictOrNull() ?: false
+                    "statusBarShowPosition" -> statusBarShowPosition = value.toBooleanStrictOrNull() ?: true
+                    "statusBarShowDocumentStats" -> statusBarShowDocumentStats = value.toBooleanStrictOrNull() ?: true
+                    "statusBarShowMode" -> statusBarShowMode = value.toBooleanStrictOrNull() ?: true
+                    "statusBarShowIndexingDetails" -> statusBarShowIndexingDetails = value.toBooleanStrictOrNull() ?: false
+                    "statusBarShowMemory" -> statusBarShowMemory = value.toBooleanStrictOrNull() ?: false
+                    "commandPaletteStyle" -> commandPaletteStyle = CommandPaletteStyle.fromId(value)
+                    "commandPaletteShowShortcuts" -> commandPaletteShowShortcuts = value.toBooleanStrictOrNull() ?: true
+                    "enableVimColonTrigger" -> enableVimColonTrigger = value.toBooleanStrictOrNull() ?: true
+                    "enableDoubleShiftTrigger" -> enableDoubleShiftTrigger = value.toBooleanStrictOrNull() ?: true
                     "recentFiles" -> {
                         // Raw value keeps escaped quotes intact; only the enclosing quote pair is stripped
                         val rawEscapedValue = trimmed.substring(colonIdx + 1).trim().removeSurrounding("\"")
@@ -164,7 +207,16 @@ object SettingsManager {
             viewportMode = viewportMode,
             showLineNumbers = showLineNumbers,
             showWhitespaceChars = showWhitespaceChars,
-            recentFiles = recentFiles
+            recentFiles = recentFiles,
+            statusBarShowPosition = statusBarShowPosition,
+            statusBarShowDocumentStats = statusBarShowDocumentStats,
+            statusBarShowMode = statusBarShowMode,
+            statusBarShowIndexingDetails = statusBarShowIndexingDetails,
+            statusBarShowMemory = statusBarShowMemory,
+            commandPaletteStyle = commandPaletteStyle,
+            commandPaletteShowShortcuts = commandPaletteShowShortcuts,
+            enableVimColonTrigger = enableVimColonTrigger,
+            enableDoubleShiftTrigger = enableDoubleShiftTrigger
         )
     }
 
@@ -193,6 +245,15 @@ object SettingsManager {
             appendLine("  \"viewportMode\": \"${s.viewportMode.id}\",")
             appendLine("  \"showLineNumbers\": ${s.showLineNumbers},")
             appendLine("  \"showWhitespaceChars\": ${s.showWhitespaceChars},")
+            appendLine("  \"statusBarShowPosition\": ${s.statusBarShowPosition},")
+            appendLine("  \"statusBarShowDocumentStats\": ${s.statusBarShowDocumentStats},")
+            appendLine("  \"statusBarShowMode\": ${s.statusBarShowMode},")
+            appendLine("  \"statusBarShowIndexingDetails\": ${s.statusBarShowIndexingDetails},")
+            appendLine("  \"statusBarShowMemory\": ${s.statusBarShowMemory},")
+            appendLine("  \"commandPaletteStyle\": \"${s.commandPaletteStyle.id}\",")
+            appendLine("  \"commandPaletteShowShortcuts\": ${s.commandPaletteShowShortcuts},")
+            appendLine("  \"enableVimColonTrigger\": ${s.enableVimColonTrigger},")
+            appendLine("  \"enableDoubleShiftTrigger\": ${s.enableDoubleShiftTrigger},")
             appendLine("  \"recentFiles\": \"${escapeJsonString(s.recentFiles.joinToString(RECENT_FILES_SEPARATOR))}\"")
             appendLine("}")
         }

@@ -98,6 +98,23 @@ class SimdSearchEngineTest extends FunSuite {
         assertEquals(caseInsensitiveLower.totalMatches, 1L)
         assert(caseInsensitiveLower.matchingLines.contains(2))
 
+        // 8b. Multi-word phrase search with spaces (unquoted)
+        val phraseBoth = searchEngine.search("connection timeout").getOrElse(fail("Query parse failed"))
+        assertEquals(phraseBoth.totalMatches, 2L)
+        assert(phraseBoth.matchingLines.contains(2))
+        assert(phraseBoth.matchingLines.contains(4))
+
+        val phraseOnlyLine2 = searchEngine.search("Database connection timeout").getOrElse(fail("Query parse failed"))
+        assertEquals(phraseOnlyLine2.totalMatches, 1L)
+        assert(phraseOnlyLine2.matchingLines.contains(2))
+
+        val phraseOnlyLine4 = searchEngine.search("failed with connection timeout").getOrElse(fail("Query parse failed"))
+        assertEquals(phraseOnlyLine4.totalMatches, 1L)
+        assert(phraseOnlyLine4.matchingLines.contains(4))
+
+        val phraseNone = searchEngine.search("Database retry").getOrElse(fail("Query parse failed"))
+        assertEquals(phraseNone.totalMatches, 0L)
+
         // 9. Progressive search emissions
         val progressiveSnapshots = new java.util.ArrayList[SearchResult]()
         val finalProgResult = searchEngine.searchProgressive("timeout", res => progressiveSnapshots.add(res))

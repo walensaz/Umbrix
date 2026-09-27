@@ -49,18 +49,32 @@ enum class ExportFormat(val extension: String, val label: String) {
 fun ExportSubFileDialog(
     session: LogSession,
     currentLine: Long,
+    sourceFilePath: String? = null,
     onExportRequested: (startLine: Long, endLine: Long, destination: File, format: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val totalLines = (session.totalLines() as Number).toLong()
     val totalBytes = session.fileSizeBytes()
+    val docTitle = if (!sourceFilePath.isNullOrBlank()) File(sourceFilePath).name else "Log"
 
-    var startLineText by remember { mutableStateOf(1L.toString()) }
-    var endLineText by remember { mutableStateOf(minOf(10_000L, totalLines).toString()) }
+    val initialStart = (currentLine + 1L).coerceIn(1L, totalLines.coerceAtLeast(1L))
+    val initialEnd = minOf(initialStart + 9_999L, totalLines.coerceAtLeast(1L))
+    var startLineText by remember(currentLine) { mutableStateOf(initialStart.toString()) }
+    var endLineText by remember(currentLine) { mutableStateOf(initialEnd.toString()) }
     var selectedFormat by remember { mutableStateOf(ExportFormat.RAW_LOG) }
-    var destinationPath by remember { 
-        mutableStateOf(System.getProperty("user.home") + File.separator + "export_slice.log") 
+
+    val initialDestination = remember(sourceFilePath) {
+        if (!sourceFilePath.isNullOrBlank()) {
+            val src = File(sourceFilePath)
+            val parent = src.parentFile?.takeIf { it.exists() && it.canWrite() }
+                ?: File(System.getProperty("user.home"))
+            val baseName = src.nameWithoutExtension.ifBlank { "export" }
+            File(parent, "${baseName}_slice.log").absolutePath
+        } else {
+            System.getProperty("user.home") + File.separator + "export_slice.log"
+        }
     }
+    var destinationPath by remember(initialDestination) { mutableStateOf(initialDestination) }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val startLine = startLineText.trim().toLongOrNull() ?: -1L
@@ -87,7 +101,7 @@ fun ExportSubFileDialog(
     }
 
     UmbrixModalCard(
-        title = "Export Sub-File",
+        title = "Export Sub-File — $docTitle",
         onDismiss = onDismiss,
         width = 540.dp,
         showCloseButton = true,

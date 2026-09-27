@@ -9,35 +9,59 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.geometry.Offset
 import com.google.re2j.Pattern
+import umbrix.core.parser.QueryParser
 import umbrix.ui.theme.UmbrixThemeSpec
 import umbrix.ui.theme.themes.DarkCarbonTheme
 
 /**
  * Extracts individual query search terms / needles, ignoring boolean AST operators.
+ * Preserves multi-word phrases with spaces (e.g. "added to" -> ["added to"]).
  */
 fun extractSearchNeedles(query: String, isRegex: Boolean = false): List<String> {
     val trimmed = query.trim()
     if (trimmed.isBlank()) return emptyList()
     if (isRegex) return listOf(trimmed)
 
-    if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length > 2) {
-        return listOf(trimmed.substring(1, trimmed.length - 1))
-    }
-
-    val tokens = trimmed.split(Regex("\\s+"))
-    val needles = mutableListOf<String>()
-    for (token in tokens) {
-        val upper = token.uppercase()
-        if (upper == "AND" || upper == "OR" || upper == "NOT") continue
-        if (token.startsWith("level:", ignoreCase = true)) {
-            val lvl = token.substring(6).trim()
-            if (lvl.isNotBlank()) needles.add(lvl)
-        } else {
-            val clean = token.trim('"', '\'', '(', ')', '/', '\\')
-            if (clean.isNotBlank()) needles.add(clean)
+    return when (val parsed = QueryParser.parse(trimmed)) {
+        is scala.util.Right -> {
+            val needles = parsed.value().extractNeedlesJava()
+            if (needles.isNotEmpty()) {
+                needles
+            } else {
+                listOf(trimmed.removeSurrounding("\""))
+            }
+        }
+        else -> {
+            // Fallback for partial/in-progress query typing
+            if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length > 2) {
+                listOf(trimmed.substring(1, trimmed.length - 1))
+            } else {
+                val upper = trimmed.uppercase()
+                val hasBooleanOperators = upper.contains(" AND ") || upper.contains(" OR ") ||
+                    upper.contains(" NOT ") || upper.startsWith("NOT ") ||
+                    trimmed.contains("&&") || trimmed.contains("||") ||
+                    trimmed.startsWith("level:", ignoreCase = true)
+                if (!hasBooleanOperators) {
+                    listOf(trimmed.removeSurrounding("\""))
+                } else {
+                    val tokens = trimmed.split(Regex("\\s+"))
+                    val fallbackNeedles = mutableListOf<String>()
+                    for (token in tokens) {
+                        val tokenUpper = token.uppercase()
+                        if (tokenUpper == "AND" || tokenUpper == "OR" || tokenUpper == "NOT" || tokenUpper == "&&" || tokenUpper == "||") continue
+                        if (token.startsWith("level:", ignoreCase = true)) {
+                            val lvl = token.substring(6).trim()
+                            if (lvl.isNotBlank()) fallbackNeedles.add(lvl)
+                        } else {
+                            val clean = token.trim('"', '\'', '(', ')', '/', '\\')
+                            if (clean.isNotBlank()) fallbackNeedles.add(clean)
+                        }
+                    }
+                    fallbackNeedles
+                }
+            }
         }
     }
-    return needles
 }
 
 /**
@@ -144,6 +168,7 @@ object HighlightCache {
         val isMatchCase: Boolean,
         val isWholeWord: Boolean,
         val isRegex: Boolean,
+        val showWhitespace: Boolean,
         val themeName: String
     )
 
@@ -163,10 +188,14 @@ object HighlightCache {
         isMatchCase: Boolean = false,
         isWholeWord: Boolean = false,
         isRegex: Boolean = false,
+        showWhitespace: Boolean = false,
         theme: UmbrixThemeSpec = DarkCarbonTheme
     ): AnnotatedString {
-        if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
+        if ((!isMatch || needles.isEmpty()) && !showWhitespace && rawText.isNotEmpty()) {
             return AnnotatedString(rawText)
+        }
+        if (rawText.isEmpty()) {
+            return AnnotatedString("")
         }
 
         val key = CacheKey(
@@ -178,6 +207,7 @@ object HighlightCache {
             isMatchCase,
             isWholeWord,
             isRegex,
+            showWhitespace,
             theme.name
         )
         val cached = lruMap[key]
@@ -194,6 +224,7 @@ object HighlightCache {
             isMatchCase,
             isWholeWord,
             isRegex,
+            showWhitespace,
             theme
         )
         lruMap[key] = built
@@ -222,6 +253,7 @@ fun buildHighlightedLine(
     isMatchCase: Boolean = false,
     isWholeWord: Boolean = false,
     isRegex: Boolean = false,
+    showWhitespace: Boolean = false,
     theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
     return HighlightCache.getOrBuild(
@@ -233,8 +265,42 @@ fun buildHighlightedLine(
         isMatchCase,
         isWholeWord,
         isRegex,
+        showWhitespace,
         theme
     )
+}
+
+/**
+ * Appends [segment] to [this] builder, substituting whitespace characters with subtle glyphs
+ * (' ' -> '·', '\t' -> '→') in [whitespaceColor] when [showWhitespace] is true.
+ */
+private fun AnnotatedString.Builder.appendSegment(
+    segment: String,
+    showWhitespace: Boolean,
+    whitespaceColor: Color
+) {
+    if (!showWhitespace) {
+        append(segment)
+        return
+    }
+    var idx = 0
+    val len = segment.length
+    while (idx < len) {
+        val c = segment[idx]
+        if (c == ' ' || c == '\t') {
+            val glyph = if (c == ' ') "·" else "→"
+            withStyle(SpanStyle(color = whitespaceColor)) {
+                append(glyph)
+            }
+            idx++
+        } else {
+            val start = idx
+            while (idx < len && segment[idx] != ' ' && segment[idx] != '\t') {
+                idx++
+            }
+            append(segment.substring(start, idx))
+        }
+    }
 }
 
 /**
@@ -249,15 +315,28 @@ private fun buildHighlightedLineDirect(
     isMatchCase: Boolean = false,
     isWholeWord: Boolean = false,
     isRegex: Boolean = false,
+    showWhitespace: Boolean = false,
     theme: UmbrixThemeSpec = DarkCarbonTheme
 ): AnnotatedString {
+    val whitespaceColor = theme.textSubtle.copy(alpha = 0.5f)
+
     if (!isMatch || needles.isEmpty() || rawText.isEmpty()) {
-        return AnnotatedString(rawText)
+        if (!showWhitespace || rawText.isEmpty()) {
+            return AnnotatedString(rawText)
+        }
+        return buildAnnotatedString {
+            appendSegment(rawText, showWhitespace = true, whitespaceColor)
+        }
     }
 
     val merged = findNeedleIntervals(rawText, needles, isMatchCase, isWholeWord, isRegex)
     if (merged.isEmpty()) {
-        return AnnotatedString(rawText)
+        if (!showWhitespace) {
+            return AnnotatedString(rawText)
+        }
+        return buildAnnotatedString {
+            appendSegment(rawText, showWhitespace = true, whitespaceColor)
+        }
     }
 
     val activeShadow = Shadow(
@@ -277,7 +356,7 @@ private fun buildHighlightedLineDirect(
             val start = interval.first.coerceIn(0, rawText.length)
             val end = interval.second.coerceIn(0, rawText.length)
             if (start > cursor) {
-                append(rawText.substring(cursor, start))
+                appendSegment(rawText.substring(cursor, start), showWhitespace, whitespaceColor)
             }
             if (end > start) {
                 // If isActiveMatch is true, only the interval matching activeMatchColumn (or all if activeMatchColumn < 0)
@@ -301,7 +380,7 @@ private fun buildHighlightedLineDirect(
             cursor = maxOf(cursor, end)
         }
         if (cursor < rawText.length) {
-            append(rawText.substring(cursor))
+            appendSegment(rawText.substring(cursor), showWhitespace, whitespaceColor)
         }
     }
 }

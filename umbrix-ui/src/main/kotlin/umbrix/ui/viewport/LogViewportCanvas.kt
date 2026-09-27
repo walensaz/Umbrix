@@ -3,6 +3,7 @@ package umbrix.ui.viewport
 import androidx.compose.foundation.HorizontalScrollbar
 import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.scrollBy
@@ -16,7 +17,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,12 +56,18 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.isPrimaryPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isCtrlPressed as isPointerCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed as isPointerMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isPointerShiftPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import umbrix.ui.contextmenu.LogContextMenuState
+import umbrix.ui.contextmenu.LogViewportContextMenu
+import umbrix.ui.toast.ToastManager
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextLayoutResult
@@ -84,6 +93,7 @@ import umbrix.ui.selection.ClickUnit
 import umbrix.ui.selection.clickSpan
 import umbrix.ui.selection.extendClickSelection
 import umbrix.ui.settings.SettingsManager
+import umbrix.ui.settings.ViewportLayoutMode
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.theme.EditorTypography
 import umbrix.ui.theme.FontSpec
@@ -99,13 +109,25 @@ import kotlin.math.max
 @Composable
 fun LogViewportCanvas(
     tab: WorkspaceTab?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onFilterByText: ((String) -> Unit)? = null,
+    onSearchText: ((String) -> Unit)? = null,
+    onSeekInScrubber: ((Long) -> Unit)? = null,
+    onExportStartingHere: ((Long) -> Unit)? = null,
+    onAddToTimeline: ((Long, String) -> Unit)? = null,
+    onAppendToScratchpad: ((Long, String) -> Unit)? = null,
+    onNewScratchpadFromSelection: ((String) -> Unit)? = null,
+    onOpenFile: (() -> Unit)? = null,
+    onNewScratchpad: (() -> Unit)? = null,
+    onToggleBookmarkFilter: (() -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
     val colors = UmbrixTheme.colors
     val fonts = UmbrixFonts.current
+
+    var contextMenuState by remember { mutableStateOf(LogContextMenuState()) }
 
     val editorFontFamily = remember(fonts.editorFontFamily) {
         EditorTypography.resolvedEditorFontFamily(fonts.editorFontFamily)
@@ -118,20 +140,31 @@ fun LogViewportCanvas(
         val canvasMaxWidth = maxWidth
         val session = tab?.session
         val searchResult = tab?.searchResult
-        val isFilteredMode = tab?.isFilteredView == true && searchResult != null
+        val isBookmarkFilteredMode = tab?.isBookmarkFilterActive == true && (tab.bookmarkManager.bookmarks.isNotEmpty())
+        val isSearchFilteredMode = tab?.isFilteredView == true && searchResult != null && !isBookmarkFilteredMode
+        val isFilteredMode = isBookmarkFilteredMode || isSearchFilteredMode
         val isTemporalMode = tab?.isTemporalFocusActive == true && !isFilteredMode
 
+        val bookmarkBitmap = remember(tab?.bookmarkManager?.bookmarks?.size, tab?.bookmarkManager?.bookmarks?.toList()) {
+            tab?.bookmarkManager?.toBitmap()
+        }
+
         val filteredView: FilteredLineView? = if (isFilteredMode && session != null) {
-            session.createFilteredView(searchResult!!.matchingLines())
+            if (isBookmarkFilteredMode && bookmarkBitmap != null) {
+                session.createFilteredView(bookmarkBitmap)
+            } else if (searchResult != null) {
+                session.createFilteredView(searchResult.matchingLines())
+            } else null
         } else null
 
-        val temporalStartLine = if (isTemporalMode) tab!!.temporalFocusStartLine else 0L
-        val temporalEndLine = if (isTemporalMode) tab!!.temporalFocusEndLine else (session?.totalLines() ?: 0L) - 1L
+        val totalSessionLines: Long = (session?.totalLines() as Number?)?.toLong() ?: 0L
+        val temporalStartLine: Long = if (isTemporalMode) tab!!.temporalFocusStartLine else 0L
+        val temporalEndLine: Long = if (isTemporalMode) tab!!.temporalFocusEndLine else (totalSessionLines - 1L)
 
-        val totalLinesCount = when {
-            isFilteredMode && filteredView != null -> filteredView.totalFilteredLines()
+        val totalLinesCount: Long = when {
+            isFilteredMode && filteredView != null -> (filteredView.totalFilteredLines() as Number).toLong()
             isTemporalMode -> max(0L, temporalEndLine - temporalStartLine + 1L)
-            else -> session?.totalLines() ?: 0L
+            else -> totalSessionLines
         }
 
         val rowHeightDp = (fonts.editorFontSizePt * fonts.lineHeightMultiplier + 4.0f).dp
@@ -165,7 +198,7 @@ fun LogViewportCanvas(
             (layout.size.width.toFloat() / sample.length.toFloat()).coerceAtLeast(1f)
         }
 
-        if (session == null) {
+        if (session == null || tab == null) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
@@ -311,6 +344,7 @@ fun LogViewportCanvas(
                 } else {
                     16.dp
                 }
+                val gutterWidthPx = with(density) { gutterWidth.toPx() }
 
                 Column(
                     modifier = Modifier
@@ -336,9 +370,9 @@ fun LogViewportCanvas(
                             val virtualRowIndex = SelectionEdgeScroll.virtualRowAt(tab.topVisibleLine, rowIndex, totalLinesCount)
                             val isRowValid = virtualRowIndex < totalLinesCount
 
-                            val physicalLine = if (isRowValid) {
+                            val physicalLine: Long = if (isRowValid) {
                                 when {
-                                    isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRowIndex)
+                                    isFilteredMode && filteredView != null -> (filteredView.physicalLineForVirtualIndex(virtualRowIndex) as Number).toLong()
                                     isTemporalMode -> temporalStartLine + virtualRowIndex
                                     else -> virtualRowIndex
                                 }
@@ -376,6 +410,8 @@ fun LogViewportCanvas(
                             val gapDuration = if (hasLatencyGap) session.latencyGapDurationAt(physicalLine) else 0L
                             val isSevereGap = gapDuration >= (SettingsManager.currentSettings.latencyGapSevereThresholdMs * 1000L)
 
+                            val isBookmarked = isRowValid && physicalLine >= 0L && tab?.bookmarkManager?.isBookmarked(physicalLine) == true
+
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -386,7 +422,19 @@ fun LogViewportCanvas(
                                     ) {
                                         focusManager.clearFocus()
                                         if (isRowValid && physicalLine >= 0L) {
-                                            tab.selectedLineIndex = physicalLine
+                                            val lineSnippet = try { session.getLineText(physicalLine, 4096) } catch (e: Exception) { "" }
+                                            val ts: Long = if (session.isTemporalDataAvailable) {
+                                                try {
+                                                    val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(physicalLine)
+                                                    (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                                                } catch (e: Exception) { 0L }
+                                            } else 0L
+                                            val added = tab.bookmarkManager.toggle(physicalLine, ts, lineSnippet)
+                                            if (added) {
+                                                ToastManager.info("Bookmarked line ${physicalLine + 1}")
+                                            } else {
+                                                ToastManager.info("Removed bookmark on line ${physicalLine + 1}")
+                                            }
                                         }
                                     }
                             ) {
@@ -398,6 +446,34 @@ fun LogViewportCanvas(
                                             .size(5.dp)
                                             .clip(CircleShape)
                                             .background(if (isSevereGap) colors.latencyGapRed else colors.latencyGapAmber)
+                                    )
+                                }
+
+                                if (isBookmarked) {
+                                    Text(
+                                        text = "📌",
+                                        fontSize = 9.sp,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .padding(start = if (hasLatencyGap) 9.dp else 2.dp)
+                                    )
+                                }
+
+                                val isExpandableMode = SettingsManager.currentSettings.viewportMode == ViewportLayoutMode.EXPANDABLE
+                                val isHeader = isExpandableMode && isRowValid && physicalLine >= 0L && session.eventClassifier().isEventHeader(physicalLine)
+                                val eventSpan = if (isHeader) session.eventClassifier().eventLineSpan(physicalLine) else 1L
+                                val hasContinuation = isExpandableMode && eventSpan > 1L
+                                val isExpanded = hasContinuation && tab.isEventExpanded(physicalLine)
+
+                                if (hasContinuation) {
+                                    Text(
+                                        text = if (isExpanded) "▼" else "▶",
+                                        fontSize = 8.sp,
+                                        color = colors.accentPrimary,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterStart)
+                                            .padding(start = if (hasLatencyGap) (if (isBookmarked) 18.dp else 9.dp) else (if (isBookmarked) 14.dp else 2.dp))
+                                            .clickable { tab.toggleEventExpansion(physicalLine) }
                                     )
                                 }
 
@@ -464,6 +540,10 @@ fun LogViewportCanvas(
                 // scrollable canvas to at least this width so vertical scrolling never causes
                 // ScrollState.maxValue to shrink and yank the user's horizontal position.
                 val stableMinWidthDp = with(density) { tab.maxObservedContentWidthPx.toDp() }
+                val currentViewportMode = SettingsManager.currentSettings.viewportMode
+                val isFullWrap = currentViewportMode == ViewportLayoutMode.FULL_WRAP
+                val isExpandable = currentViewportMode == ViewportLayoutMode.EXPANDABLE
+                val showWhitespace = SettingsManager.currentSettings.showWhitespaceChars
 
                 Column(
                     modifier = Modifier
@@ -477,6 +557,23 @@ fun LogViewportCanvas(
                             .fillMaxWidth()
                             .clipToBounds()
                             .pointerHoverIcon(PointerIcon(Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)))
+                            .onPointerEvent(PointerEventType.Press) { event ->
+                                if (event.buttons.isSecondaryPressed && !contextMenuState.isVisible && tab != null) {
+                                    val change = event.changes.firstOrNull()
+                                    if (change != null && !change.isConsumed) {
+                                        change.consume()
+                                        val posX = gutterWidthPx + change.position.x
+                                        val posY = change.position.y
+                                        contextMenuState = LogContextMenuState(
+                                            isVisible = true,
+                                            physicalLine = (tab.selectedLineIndex ?: tab.topVisibleLine).coerceAtLeast(0L),
+                                            lineText = "",
+                                            selectedText = null,
+                                            positionPx = Offset(posX, posY)
+                                        )
+                                    }
+                                }
+                            }
                             .pointerInput(tab, totalLinesCount, searchResult, isFilteredMode, isTemporalMode, temporalStartLine, rowHeightPx) {
                                 val clicks = ClickSequence()
                                 awaitEachGesture {
@@ -525,8 +622,8 @@ fun LogViewportCanvas(
                                         var cachedText = ""
                                         fun displayedTextAt(virtualRow: Long): String {
                                             if (virtualRow != cachedTextRow) {
-                                                val physicalLine = when {
-                                                    isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRow)
+                                                val physicalLine: Long = when {
+                                                    isFilteredMode && filteredView != null -> (filteredView.physicalLineForVirtualIndex(virtualRow) as Number).toLong()
                                                     isTemporalMode -> temporalStartLine + virtualRow
                                                     else -> virtualRow
                                                 }
@@ -623,22 +720,24 @@ fun LogViewportCanvas(
                             }
                     ) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .horizontalScroll(horizontalScrollState)
+                            modifier = if (isFullWrap) {
+                                Modifier.fillMaxSize()
+                            } else {
+                                Modifier.fillMaxSize().horizontalScroll(horizontalScrollState)
+                            }
                         ) {
                             Column(
                                 modifier = Modifier
-                                    .widthIn(min = stableMinWidthDp)
+                                    .then(if (isFullWrap) Modifier.fillMaxWidth() else Modifier.widthIn(min = stableMinWidthDp))
                                     .wrapContentHeight(align = Alignment.Top, unbounded = true)
                                     .padding(start = 8.dp)
                                     .graphicsLayer { translationY = -tab.subLineScrollOffsetPx }
                             ) {
                                 for (rowIndex in 0 until renderRowCount) {
                                     val virtualRowIndex = SelectionEdgeScroll.virtualRowAt(tab.topVisibleLine, rowIndex, totalLinesCount)
-                                    val physicalLine = if (virtualRowIndex < totalLinesCount) {
+                                    val physicalLine: Long = if (virtualRowIndex < totalLinesCount) {
                                         when {
-                                            isFilteredMode && filteredView != null -> filteredView.physicalLineForVirtualIndex(virtualRowIndex)
+                                            isFilteredMode && filteredView != null -> (filteredView.physicalLineForVirtualIndex(virtualRowIndex) as Number).toLong()
                                             isTemporalMode -> temporalStartLine + virtualRowIndex
                                             else -> virtualRowIndex
                                         }
@@ -689,6 +788,7 @@ fun LogViewportCanvas(
                                         isMatchCase,
                                         isWholeWord,
                                         isRegex,
+                                        showWhitespace,
                                         colors
                                     ) {
                                         buildHighlightedLine(
@@ -700,7 +800,8 @@ fun LogViewportCanvas(
                                             isMatchCase,
                                             isWholeWord,
                                             isRegex,
-                                            colors
+                                            showWhitespace = showWhitespace,
+                                            theme = colors
                                         )
                                     }
                                     val selectedRange = tab.selectionState.getSelectedRangeForLine(virtualRowIndex, rawLineText.length)
@@ -710,11 +811,53 @@ fun LogViewportCanvas(
                                         baseAnnotatedLine
                                     }
 
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(rowHeightDp)
+                                    val isRowValid = virtualRowIndex < totalLinesCount
+                                    val isHeader = isRowValid && physicalLine >= 0L && isExpandable && session.eventClassifier().isEventHeader(physicalLine)
+                                    val eventSpan = if (isHeader) session.eventClassifier().eventLineSpan(physicalLine) else 1L
+                                    val hasContinuation = isExpandable && eventSpan > 1L
+                                    val isExpanded = hasContinuation && tab.isEventExpanded(physicalLine)
+
+                                    val rowContainerModifier = if (isFullWrap || isExpanded) {
+                                        Modifier.fillMaxWidth().wrapContentHeight().heightIn(min = rowHeightDp)
+                                    } else {
+                                        Modifier.fillMaxWidth().height(rowHeightDp)
+                                    }
+
+                                    Column(
+                                        modifier = rowContainerModifier
                                             .background(rowBackgroundColor)
+                                            .onPointerEvent(PointerEventType.Press) { event ->
+                                                if (event.buttons.isSecondaryPressed && physicalLine >= 0L && tab != null) {
+                                                    event.changes.forEach { it.consume() }
+                                                    val change = event.changes.firstOrNull()
+                                                    val clickPos = change?.position ?: Offset.Zero
+                                                    val posX = gutterWidthPx + with(density) { 8.dp.toPx() } + clickPos.x - horizontalScrollState.value
+                                                    val posY = (rowIndex * rowHeightPx - tab.subLineScrollOffsetPx + clickPos.y).coerceAtLeast(0f)
+
+                                                    val selectedText = try {
+                                                        if (tab.selectionState.hasSelection() && session != null) {
+                                                            val temporalStart: Long = if (filteredView == null && tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
+                                                            val virtualLineCount: Long = when {
+                                                                filteredView != null -> (filteredView.totalFilteredLines() as Number).toLong()
+                                                                tab.isTemporalFocusActive -> (tab.temporalFocusEndLine - temporalStart + 1L).coerceAtLeast(0L)
+                                                                else -> (session.totalLines() as Number).toLong()
+                                                            }
+                                                            tab.selectionState.extractSelectedText(virtualLineCount, { vRow ->
+                                                                val pLine: Long = (filteredView?.physicalLineForVirtualIndex(vRow) as Number?)?.toLong() ?: (temporalStart + vRow)
+                                                                session.getLineText(pLine, ViewportState.MAX_SHAPED_CHARS)
+                                                            })
+                                                        } else null
+                                                    } catch (_: Exception) { null }
+
+                                                    contextMenuState = LogContextMenuState(
+                                                        isVisible = true,
+                                                        physicalLine = physicalLine,
+                                                        lineText = rawLineText,
+                                                        selectedText = selectedText?.takeIf { it.isNotEmpty() },
+                                                        positionPx = Offset(posX, posY)
+                                                    )
+                                                }
+                                            }
                                             .clickable(
                                                 interactionSource = remember { MutableInteractionSource() },
                                                 indication = null
@@ -724,36 +867,99 @@ fun LogViewportCanvas(
                                                     tab.selectedLineIndex = physicalLine
                                                 }
                                             },
-                                        contentAlignment = Alignment.CenterStart
+                                        verticalArrangement = Arrangement.Center
                                     ) {
-                                        Text(
-                                            text = annotatedLine,
-                                            fontFamily = editorFontFamily,
-                                            fontSize = fonts.editorFontSizePt.sp,
-                                            fontWeight = fonts.resolvedEditorWeight,
-                                            style = TextStyle(fontFeatureSettings = fontFeatureSettings),
-                                            color = colors.textEditor,
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            onTextLayout = { layoutResult ->
-                                                textLayoutResults[rowIndex] = Triple(virtualRowIndex, physicalLine, layoutResult)
-                                                // Ratchet: grow the max observed width but never shrink it.
-                                                // Using layoutResult.size.width captures the full unsoftWrapped
-                                                // pixel extent of the line, which matches what the scroll canvas
-                                                // needs to size itself against.
-                                                val renderedLineWidthPx = layoutResult.size.width.toFloat()
-                                                if (renderedLineWidthPx > tab.maxObservedContentWidthPx) {
-                                                    tab.maxObservedContentWidthPx = renderedLineWidthPx
-                                                }
-                                                if (layoutResult.layoutInput.text.isNotEmpty() && rowIndex == 0) {
-                                                    val textLen = layoutResult.layoutInput.text.length
-                                                    val lineWidth = layoutResult.getLineRight(0)
-                                                    if (lineWidth > 0f && textLen > 0) {
-                                                        dynamicCharWidthPx = (lineWidth / textLen.toFloat()).coerceAtLeast(1f)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (hasContinuation) {
+                                                Text(
+                                                    text = if (isExpanded) "▼" else "▶",
+                                                    fontSize = 10.sp,
+                                                    color = colors.accentPrimary,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier
+                                                        .clickable { tab.toggleEventExpansion(physicalLine) }
+                                                        .padding(end = 4.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = annotatedLine,
+                                                fontFamily = editorFontFamily,
+                                                fontSize = fonts.editorFontSizePt.sp,
+                                                fontWeight = fonts.resolvedEditorWeight,
+                                                style = TextStyle(fontFeatureSettings = fontFeatureSettings),
+                                                color = colors.textEditor,
+                                                maxLines = if (isFullWrap) Int.MAX_VALUE else 1,
+                                                softWrap = isFullWrap,
+                                                onTextLayout = { layoutResult ->
+                                                    textLayoutResults[rowIndex] = Triple(virtualRowIndex, physicalLine, layoutResult)
+                                                    // Ratchet: grow the max observed width but never shrink it.
+                                                    // Using layoutResult.size.width captures the full unsoftWrapped
+                                                    // pixel extent of the line, which matches what the scroll canvas
+                                                    // needs to size itself against.
+                                                    val renderedLineWidthPx = layoutResult.size.width.toFloat()
+                                                    if (renderedLineWidthPx > tab.maxObservedContentWidthPx) {
+                                                        tab.maxObservedContentWidthPx = renderedLineWidthPx
+                                                    }
+                                                    if (layoutResult.layoutInput.text.isNotEmpty() && rowIndex == 0) {
+                                                        val textLen = layoutResult.layoutInput.text.length
+                                                        val lineWidth = layoutResult.getLineRight(0)
+                                                        if (lineWidth > 0f && textLen > 0) {
+                                                            dynamicCharWidthPx = (lineWidth / textLen.toFloat()).coerceAtLeast(1f)
+                                                        }
                                                     }
                                                 }
+                                            )
+                                            if (hasContinuation && !isExpanded) {
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text(
+                                                    text = "[+${eventSpan - 1} frames]",
+                                                    fontSize = 10.sp,
+                                                    color = colors.textSubtle,
+                                                    fontWeight = FontWeight.Medium,
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(3.dp))
+                                                        .background(colors.surfaceElevated)
+                                                        .clickable { tab.toggleEventExpansion(physicalLine) }
+                                                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
                                             }
-                                        )
+                                        }
+
+                                        if (isExpanded) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .padding(start = 14.dp, top = 2.dp, bottom = 4.dp)
+                                                    .clip(RoundedCornerShape(3.dp))
+                                                    .border(1.dp, colors.border, RoundedCornerShape(3.dp))
+                                                    .background(colors.surfaceElevated.copy(alpha = 0.6f))
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                val framesToShow = minOf(eventSpan - 1L, 50L)
+                                                for (frameOffset in 1L..framesToShow) {
+                                                    val frameLine = physicalLine + frameOffset
+                                                    val frameText = try { session.getLineText(frameLine, 2048) } catch (e: Exception) { "" }
+                                                    Text(
+                                                        text = frameText,
+                                                        fontFamily = editorFontFamily,
+                                                        fontSize = (fonts.editorFontSizePt - 1.0f).coerceAtLeast(10f).sp,
+                                                        fontWeight = FontWeight.Normal,
+                                                        color = colors.textSecondary,
+                                                        maxLines = if (isFullWrap) Int.MAX_VALUE else 1,
+                                                        softWrap = isFullWrap
+                                                    )
+                                                }
+                                                if (eventSpan - 1L > 50L) {
+                                                    Text(
+                                                        text = "... [+${eventSpan - 1L - 50L} more frames in file]",
+                                                        fontSize = 10.sp,
+                                                        color = colors.textSubtle
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -761,27 +967,29 @@ fun LogViewportCanvas(
                     }
 
                     // --- Bottom Horizontal Scrollbar ---
-                    HorizontalScrollbar(
-                        adapter = rememberScrollbarAdapter(horizontalScrollState),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(12.dp)
-                            .background(colors.surfaceGutter),
-                        style = ScrollbarStyle(
-                            minimalHeight = 32.dp,
-                            thickness = 8.dp,
-                            shape = RoundedCornerShape(4.dp),
-                            hoverDurationMillis = 300,
-                            unhoverColor = colors.scrollbarHorizontalUnhovered,
-                            hoverColor = colors.scrollbarHorizontalHovered
+                    if (!isFullWrap) {
+                        HorizontalScrollbar(
+                            adapter = rememberScrollbarAdapter(horizontalScrollState),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(12.dp)
+                                .background(colors.surfaceGutter),
+                            style = ScrollbarStyle(
+                                minimalHeight = 32.dp,
+                                thickness = 8.dp,
+                                shape = RoundedCornerShape(4.dp),
+                                hoverDurationMillis = 300,
+                                unhoverColor = colors.scrollbarHorizontalUnhovered,
+                                hoverColor = colors.scrollbarHorizontalHovered
+                            )
                         )
-                    )
+                    }
                 }
 
                 // --- GPU Seismograph Minimap ---
                 if (SettingsManager.currentSettings.isMinimapEnabled) {
                     val minimapTable = session.minimapTableOrNull()
-                    val minimapTotalLines = if (isTemporalMode) session.totalLines() else totalLinesCount
+                    val minimapTotalLines: Long = if (isTemporalMode) (session.totalLines() as Number).toLong() else totalLinesCount
                     val effectiveTopLine = if (isTemporalMode) temporalStartLine + tab.topVisibleLine else tab.topVisibleLine
 
                     GpuSeismographMinimap(
@@ -795,6 +1003,7 @@ fun LogViewportCanvas(
                         focusStartLine = temporalStartLine,
                         focusEndLine = temporalEndLine,
                         isFocusActive = isTemporalMode,
+                        bookmarkManager = tab?.bookmarkManager,
                         onScrollToLine = { newTop ->
                             tab.subLineScrollOffsetPx = 0f
                             if (isTemporalMode) {
@@ -823,5 +1032,117 @@ fun LogViewportCanvas(
                 }
             }
         }
+
+        // --- Right-Click Floating Context Menu ---
+        LogViewportContextMenu(
+            state = contextMenuState,
+            onDismiss = { contextMenuState = contextMenuState.copy(isVisible = false) },
+            onCopyLineText = { text ->
+                try {
+                    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                    val sel = StringSelection(text)
+                    clipboard.setContents(sel, sel)
+                    ToastManager.info("Line copied to clipboard")
+                } catch (_: Exception) {
+                    ToastManager.error("Failed to copy to clipboard")
+                }
+            },
+            onCopyLineNumber = { lineNum ->
+                try {
+                    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                    val sel = StringSelection(lineNum.toString())
+                    clipboard.setContents(sel, sel)
+                    ToastManager.info("Line number $lineNum copied to clipboard")
+                } catch (_: Exception) {
+                    ToastManager.error("Failed to copy line number")
+                }
+            },
+            onFilterByText = { query ->
+                if (onFilterByText != null) {
+                    onFilterByText(query)
+                } else if (tab != null) {
+                    tab.searchQuery = query
+                    tab.isFilteredView = true
+                }
+            },
+            onSearchText = { query ->
+                if (onSearchText != null) {
+                    onSearchText(query)
+                } else if (tab != null) {
+                    tab.searchQuery = query
+                }
+            },
+            onSeekInScrubber = { line ->
+                if (onSeekInScrubber != null) {
+                    onSeekInScrubber(line)
+                } else if (tab != null) {
+                    tab.selectedLineIndex = line
+                    tab.topVisibleLine = (line - 10).coerceAtLeast(0L)
+                }
+            },
+            onExportStartingHere = { line ->
+                if (onExportStartingHere != null) {
+                    onExportStartingHere(line)
+                } else {
+                    ToastManager.info("Export starting at line ${line + 1}")
+                }
+            },
+            onAddToTimeline = onAddToTimeline,
+            onToggleBookmark = { line, text ->
+                if (tab != null && session != null) {
+                    val ts: Long = if (session.isTemporalDataAvailable) {
+                        try {
+                            val cpIdx = session.temporalIndex().closestCheckpointIndexForLine(line)
+                            (session.temporalIndex().timestampAtCheckpoint(cpIdx) as Number).toLong()
+                        } catch (e: Exception) { 0L }
+                    } else 0L
+                    val added = tab.bookmarkManager.toggle(line, ts, text)
+                    if (added) {
+                        ToastManager.info("Bookmarked line ${line + 1}")
+                    } else {
+                        ToastManager.info("Removed bookmark on line ${line + 1}")
+                    }
+                }
+            },
+            onAppendToScratchpad = onAppendToScratchpad,
+            onNewScratchpadFromSelection = onNewScratchpadFromSelection,
+            onOpenFile = onOpenFile,
+            onNewScratchpad = onNewScratchpad
+        )
+
+        // --- Floating Active Filter Indicator (Bookmarks Only) ---
+        if (isBookmarkFilteredMode && tab != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 8.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(colors.surfaceElevated)
+                    .border(1.dp, colors.borderFocused, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "📌 Filtered View: Showing ${tab.bookmarkManager.bookmarks.size} Bookmarks",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.accentPrimary
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "✕ Restore Full View (Ctrl+Alt+B)",
+                        fontSize = 11.sp,
+                        color = colors.textSecondary,
+                        modifier = Modifier
+                            .clickable {
+                                tab.isBookmarkFilterActive = false
+                                onToggleBookmarkFilter?.invoke()
+                            }
+                            .padding(2.dp)
+                    )
+                }
+            }
+        }
     }
 }
+

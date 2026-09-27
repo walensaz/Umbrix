@@ -25,11 +25,11 @@ class QueryParserTest extends FunSuite {
     assertEquals(caseSens, Right(QueryAst.Literal("FatalError", caseSensitive = true)))
   }
 
-  test("QueryParser parses implicit and explicit AND queries") {
-    val implicitAnd = QueryParser.parse("database timeout")
+  test("QueryParser parses literal phrases with spaces and explicit AND queries") {
+    val phrase = QueryParser.parse("database timeout")
     assertEquals(
-      implicitAnd,
-      Right(QueryAst.And(QueryAst.Literal("database", false), QueryAst.Literal("timeout", false)))
+      phrase,
+      Right(QueryAst.Literal("database timeout", caseSensitive = false))
     )
 
     val explicitAnd = QueryParser.parse("database AND timeout")
@@ -37,6 +37,43 @@ class QueryParserTest extends FunSuite {
       explicitAnd,
       Right(QueryAst.And(QueryAst.Literal("database", false), QueryAst.Literal("timeout", false)))
     )
+
+    val multiWordPhrase = QueryParser.parse("added to cluster")
+    assertEquals(
+      multiWordPhrase,
+      Right(QueryAst.Literal("added to cluster", caseSensitive = false))
+    )
+
+    val filterWithPhrase = QueryParser.parse("level:ERROR AND added to")
+    assertEquals(
+      filterWithPhrase,
+      Right(QueryAst.And(QueryAst.LevelFilter(LogLevel.Error), QueryAst.Literal("added to", false)))
+    )
+
+    val orPhrases = QueryParser.parse("added to OR deleted from")
+    assertEquals(
+      orPhrases,
+      Right(QueryAst.Or(QueryAst.Literal("added to", false), QueryAst.Literal("deleted from", false)))
+    )
+
+    val caseSensitivePhrase = QueryParser.parse("case:sensitive added to")
+    assertEquals(
+      caseSensitivePhrase,
+      Right(QueryAst.Literal("added to", caseSensitive = true))
+    )
+  }
+
+  test("QueryAst extractNeedles returns exact phrase and filter literals") {
+    val ast1 = QueryParser.parse("added to").getOrElse(fail("parse failed"))
+    assertEquals(ast1.extractNeedles, List("added to"))
+    assertEquals(ast1.extractNeedlesJava.size(), 1)
+    assertEquals(ast1.extractNeedlesJava.get(0), "added to")
+
+    val ast2 = QueryParser.parse("level:ERROR AND timeout").getOrElse(fail("parse failed"))
+    assertEquals(ast2.extractNeedles, List("ERROR", "timeout"))
+
+    val ast3 = QueryParser.parse("added to OR deleted from").getOrElse(fail("parse failed"))
+    assertEquals(ast3.extractNeedles, List("added to", "deleted from"))
   }
 
   test("QueryParser respects operator precedence: NOT > AND > OR") {

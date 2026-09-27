@@ -51,6 +51,15 @@ class WorkstationErrorHandlerTest {
     val needles3 = extractSearchNeedles("\"database deadlock\"")
     assertEquals(listOf("database deadlock"), needles3)
 
+    val phraseNeedles = extractSearchNeedles("added to")
+    assertEquals(listOf("added to"), phraseNeedles)
+
+    val multiWordAnd = extractSearchNeedles("level:ERROR AND added to")
+    assertEquals(listOf("ERROR", "added to"), multiWordAnd)
+
+    val orPhrases = extractSearchNeedles("added to OR deleted from")
+    assertEquals(listOf("added to", "deleted from"), orPhrases)
+
     val empty = extractSearchNeedles("   ")
     assertTrue(empty.isEmpty())
   }

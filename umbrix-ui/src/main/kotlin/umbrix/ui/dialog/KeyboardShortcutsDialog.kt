@@ -35,19 +35,31 @@ private data class ShortcutItem(
 )
 
 private val ALL_SHORTCUTS = listOf(
+    // Command Palette & Global Search
+    ShortcutItem("Command Palette", "Universal Command Palette (Quick Open)", listOf("Ctrl", "P")),
+    ShortcutItem("Command Palette", "Command Palette (Actions)", listOf("Ctrl", "Shift", "P")),
+    ShortcutItem("Command Palette", "Search Everywhere", listOf("Shift", "Shift")),
+    ShortcutItem("Command Palette", "Vim Ex-Command Mode", listOf(":")),
+    ShortcutItem("Command Palette", "Row Context Actions", listOf("Right Click")),
+
     // File Operations
     ShortcutItem("File", "Open Log File", listOf("Ctrl", "O")),
+    ShortcutItem("File", "New Scratchpad Buffer", listOf("Ctrl", "N")),
     ShortcutItem("File", "Export Sub-File", listOf("Ctrl", "Shift", "S")),
     ShortcutItem("File", "Close Active Tab", listOf("Ctrl", "W")),
     ShortcutItem("File", "Exit Application", listOf("Alt", "F4")),
 
-    // Navigation
+    // Navigation & Forensics
     ShortcutItem("Navigation", "Go to Line or Timestamp", listOf("Ctrl", "G")),
     ShortcutItem("Navigation", "Temporal Range Scrubber", listOf("Ctrl", "T")),
     ShortcutItem("Navigation", "Jump to First Line", listOf("Home")),
     ShortcutItem("Navigation", "Jump to Last Line", listOf("End")),
     ShortcutItem("Navigation", "Page Down Viewport", listOf("PageDown")),
     ShortcutItem("Navigation", "Page Up Viewport", listOf("PageUp")),
+    ShortcutItem("Bookmarks", "Next Bookmark", listOf("F2")),
+    ShortcutItem("Bookmarks", "Previous Bookmark", listOf("Shift", "F2")),
+    ShortcutItem("Bookmarks", "Toggle Bookmark on Line", listOf("Ctrl", "B")),
+    ShortcutItem("Timeline", "Toggle Incident Timeline Drawer", listOf("Ctrl", "Shift", "T")),
 
     // Search & Forensic Analysis
     ShortcutItem("Search", "Find in File", listOf("Ctrl", "F")),

@@ -27,7 +27,7 @@ sealed trait QueryToken {
 }
 
 object QueryToken {
-  case class Term(text: String, isQuoted: Boolean, offset: Int) extends QueryToken
+  case class Term(text: String, isQuoted: Boolean, offset: Int, endOffset: Int) extends QueryToken
   case class RegexTerm(pattern: String, offset: Int) extends QueryToken
   case class LevelTerm(level: LogLevel, offset: Int) extends QueryToken
   case class SinceTerm(epochMicros: Long, offset: Int) extends QueryToken
@@ -63,7 +63,7 @@ object QueryParser {
         if (tokens.isEmpty) {
           Right(QueryAst.Empty)
         } else {
-          val parserState: ParserState = ParserState(tokens)
+          val parserState: ParserState = ParserState(tokens, trimmedQuery)
           parserState.parseExpression().flatMap { ast =>
             if (parserState.hasNext) {
               val unparsedToken: QueryToken = parserState.peek
@@ -122,7 +122,7 @@ object QueryParser {
         if (!quoteClosed) {
           encounteredError = Some(QueryParseError(s"Unclosed quote starting at offset $startOffset", startOffset))
         } else {
-          tokensAccumulator = QueryToken.Term(stringBuffer.toString, isQuoted = true, startOffset) :: tokensAccumulator
+          tokensAccumulator = QueryToken.Term(stringBuffer.toString, isQuoted = true, startOffset, index) :: tokensAccumulator
         }
       } else if (currentChar == '/') {
         // Regex literal /pattern/
@@ -199,7 +199,7 @@ object QueryParser {
           val regexString: String = rawWord.substring(6)
           tokensAccumulator = QueryToken.RegexTerm(regexString, startOffset) :: tokensAccumulator
         } else {
-          tokensAccumulator = QueryToken.Term(rawWord, isQuoted = false, startOffset) :: tokensAccumulator
+          tokensAccumulator = QueryToken.Term(rawWord, isQuoted = false, startOffset, index) :: tokensAccumulator
         }
       }
     }
@@ -227,7 +227,7 @@ object QueryParser {
 
   private def tokenRepresentation(token: QueryToken): String = {
     token match {
-      case QueryToken.Term(text, _, _) => text
+      case QueryToken.Term(text, _, _, _) => text
       case QueryToken.RegexTerm(p, _) => s"/$p/"
       case QueryToken.LevelTerm(l, _) => s"level:$l"
       case QueryToken.SinceTerm(m, _) => s"since:$m"
@@ -244,7 +244,7 @@ object QueryParser {
   /**
    * Stateful recursive-descent parser working over a token stream.
    */
-  private class ParserState(tokens: List[QueryToken]) {
+  private class ParserState(tokens: List[QueryToken], rawInput: String) {
     private var currentTokens: List[QueryToken] = tokens
 
     def hasNext: Boolean = currentTokens.nonEmpty
@@ -356,8 +356,20 @@ object QueryParser {
         Left(QueryParseError("Expected search term", 0))
       } else {
         advance() match {
-          case QueryToken.Term(text, _, _) =>
-            Right(QueryAst.Literal(text, caseSensitive = isCaseSensitive))
+          case QueryToken.Term(text, isQuoted, offset, endOffset) =>
+            if (isQuoted) {
+              Right(QueryAst.Literal(text, caseSensitive = isCaseSensitive))
+            } else {
+              var phraseText: String = text
+              var lastEndOffset: Int = endOffset
+              while (hasNext && isUnquotedTerm(peek)) {
+                val nextTerm: QueryToken.Term = advance().asInstanceOf[QueryToken.Term]
+                val spacing: String = rawInput.substring(lastEndOffset, nextTerm.offset)
+                phraseText = phraseText + spacing + nextTerm.text
+                lastEndOffset = nextTerm.endOffset
+              }
+              Right(QueryAst.Literal(phraseText, caseSensitive = isCaseSensitive))
+            }
           case QueryToken.RegexTerm(patternText, offset) =>
             try {
               val compiledPattern: Pattern = Pattern.compile(patternText)
@@ -375,6 +387,13 @@ object QueryParser {
           case other =>
             Left(QueryParseError(s"Unexpected token '${tokenRepresentation(other)}'", other.offset))
         }
+      }
+    }
+
+    private def isUnquotedTerm(token: QueryToken): Boolean = {
+      token match {
+        case QueryToken.Term(_, false, _, _) => true
+        case _ => false
       }
     }
 

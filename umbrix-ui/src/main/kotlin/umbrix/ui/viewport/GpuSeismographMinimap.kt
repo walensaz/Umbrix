@@ -73,6 +73,7 @@ fun GpuSeismographMinimap(
     focusStartLine: Long = 0L,
     focusEndLine: Long = 0L,
     isFocusActive: Boolean = false,
+    bookmarkManager: umbrix.ui.bookmarks.BookmarkManager? = null,
     onScrollToLine: (Long) -> Unit
 ) {
     var isHovered by remember { mutableStateOf(false) }
@@ -242,6 +243,19 @@ fun GpuSeismographMinimap(
                         topLeft = Offset(0f, viewTopY + viewHeight - 1.5f),
                         size = Size(canvasWidth, 1.5f)
                     )
+                }
+
+                // Render Bookmarks (Cyan horizontal tick marks)
+                if (bookmarkManager != null && totalLines > 0L) {
+                    for (bm in bookmarkManager.bookmarks) {
+                        val yRatio = (bm.lineIndex.toDouble() / totalLines.toDouble()).coerceIn(0.0, 1.0)
+                        val yPx = (yRatio * canvasHeight).toFloat()
+                        drawRect(
+                            color = Color(0xFF00E5FF),
+                            topLeft = Offset(0f, (yPx - 1f).coerceAtLeast(0f)),
+                            size = Size(canvasWidth, 2.5f)
+                        )
+                    }
                 }
 
                 // Render Temporal Focus Mode dimming overlay

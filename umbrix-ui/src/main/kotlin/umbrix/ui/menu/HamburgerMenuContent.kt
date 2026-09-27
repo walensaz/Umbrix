@@ -22,6 +22,8 @@ import java.io.File
 @Composable
 fun ColumnScope.HamburgerMenuContent(
     settings: WorkstationSettings,
+    activeDocumentTitle: String? = null,
+    isBookmarkFilterActive: Boolean = false,
     onAction: (MenuAction) -> Unit
 ) {
     // --- Section 1: File Operations ---
@@ -30,6 +32,13 @@ fun ColumnScope.HamburgerMenuContent(
         shortcut = "Ctrl+O",
         icon = { UmbrixMenuGlyph("📂") },
         onClick = { onAction(MenuAction.OpenFile) }
+    )
+
+    UmbrixMenuItem(
+        text = "New Scratchpad Buffer",
+        shortcut = "Ctrl+N",
+        icon = { UmbrixMenuGlyph("📝") },
+        onClick = { onAction(MenuAction.NewScratchpad) }
     )
 
     UmbrixSubMenu(
@@ -58,8 +67,9 @@ fun ColumnScope.HamburgerMenuContent(
         }
     }
 
+    val exportLabel = if (!activeDocumentTitle.isNullOrBlank()) "Export Sub-File ($activeDocumentTitle)..." else "Export Sub-File..."
     UmbrixMenuItem(
-        text = "Export Sub-File...",
+        text = exportLabel,
         shortcut = "Ctrl+Shift+S",
         icon = { UmbrixMenuGlyph("⤓") },
         onClick = { onAction(MenuAction.ExportSubFile) }
@@ -69,17 +79,46 @@ fun ColumnScope.HamburgerMenuContent(
 
     // --- Section 2: Search & Navigation ---
     UmbrixMenuItem(
+        text = "Command Palette...",
+        shortcut = "Ctrl+Shift+P",
+        icon = { UmbrixMenuGlyph("⌘") },
+        onClick = { onAction(MenuAction.CommandPalette) }
+    )
+
+    UmbrixMenuItem(
         text = "Find...",
         shortcut = "Ctrl+F",
         icon = { UmbrixMenuGlyph("🔍") },
         onClick = { onAction(MenuAction.Find) }
     )
 
+    val goToLabel = if (!activeDocumentTitle.isNullOrBlank()) "Go To Line / Timestamp ($activeDocumentTitle)..." else "Go To Line / Timestamp..."
     UmbrixMenuItem(
-        text = "Go To Line / Timestamp...",
+        text = goToLabel,
         shortcut = "Ctrl+G",
         icon = { UmbrixMenuGlyph("⏩") },
         onClick = { onAction(MenuAction.GoToLineTimestamp) }
+    )
+
+    UmbrixMenuItem(
+        text = "Manage Bookmarks...",
+        shortcut = "F2",
+        icon = { UmbrixMenuGlyph("📌") },
+        onClick = { onAction(MenuAction.ManageBookmarks) }
+    )
+
+    UmbrixMenuItem(
+        text = if (isBookmarkFilterActive) "Show All Lines (Exit Bookmark Filter)" else "Filter View to Bookmarks",
+        shortcut = "Ctrl+Alt+B",
+        icon = { UmbrixMenuGlyph("🏷") },
+        onClick = { onAction(MenuAction.ToggleBookmarkFilter) }
+    )
+
+    UmbrixMenuItem(
+        text = "Incident Timeline Drawer",
+        shortcut = "Ctrl+Shift+T",
+        icon = { UmbrixMenuGlyph("⏱") },
+        onClick = { onAction(MenuAction.ToggleTimelineDrawer) }
     )
 
     UmbrixMenuItem(

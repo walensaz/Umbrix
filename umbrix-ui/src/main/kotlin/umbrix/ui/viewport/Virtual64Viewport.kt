@@ -1,18 +1,10 @@
 package umbrix.ui.viewport
+import umbrix.ui.settings.ViewportLayoutMode
 
 /**
- * Tri-Mode Viewport Layout configurations.
+ * Backward-compatible type alias for [ViewportLayoutMode].
  */
-enum class ViewportMode {
-    /** Fixed 20px rows, maximum 60–120 FPS performance, O(1) coordinate math. */
-    COMPACT,
-
-    /** Base 20px rows with inline chevrons expanding multi-line stack traces (Default). */
-    EXPANDABLE,
-
-    /** Soft line-wrapping with bounded sliding-window layout cache. */
-    FULL_WRAP
-}
+typealias ViewportMode = ViewportLayoutMode
 
 /**
  * 64-bit Viewport state completely immune to 32-bit integer overflow and Float scroll jitter.
@@ -25,7 +17,7 @@ enum class ViewportMode {
 data class ViewportState(
     val topVisibleLine: Long = 0L,
     val subPixelOffsetY: Float = 0.0f,
-    val mode: ViewportMode = ViewportMode.EXPANDABLE,
+    val mode: ViewportLayoutMode = ViewportLayoutMode.EXPANDABLE,
     val baseRowHeight: Float = 20.0f
 ) {
     companion object {
