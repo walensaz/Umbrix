@@ -14,7 +14,7 @@ import umbrix.core.slicing.SliceResult
 import umbrix.core.temporal.{LatencyGapResult, LatencyGapScanner}
 import umbrix.core.types.{ByteOffset, EpochMicros, LineIndex}
 import umbrix.core.view.FilteredLineView
-import umbrix.index.{PhysicalLineIndexerImpl, TemporalCheckpointTable, TwoLevelSparseIndex}
+import umbrix.index.{PersistentIndexCache, PhysicalLineIndexerImpl, TemporalCheckpointTable, TwoLevelSparseIndex}
 import umbrix.simd.VectorScanner
 import umbrix.vfs.LogStorageReader
 
@@ -696,7 +696,52 @@ object LogSession {
       var indexerRef: PhysicalLineIndexerImpl = null
 
       val (indexer, physicalFuture): (PhysicalLineIndexerImpl, CompletableFuture[TwoLevelSparseIndex]) =
-        if (storageReader.path != null && java.nio.file.Files.exists(storageReader.path)) {
+        if (storageReader.path != null && java.nio.file.Files.exists(storageReader.path) && !isLiveStream) {
+          val cachedIndexOpt = PersistentIndexCache.tryLoad(storageReader.path, storageReader)
+          if (cachedIndexOpt.isDefined) {
+            val cachedIdx = cachedIndexOpt.get
+            val createdIndexer = new PhysicalLineIndexerImpl(storageReader, cachedIdx)
+            bytesScanned = storageReader.sizeBytes
+            physicalProgress = 1.0
+            triggerTier2(createdIndexer)
+            (createdIndexer, CompletableFuture.completedFuture(cachedIdx))
+          } else {
+            var initialSnapshot: TwoLevelSparseIndex = null
+            val pFuture = TwoLevelSparseIndex.buildStreamingProgressive(
+              storageReader.path,
+              onInitialChunkReady = (snapshot: TwoLevelSparseIndex) => {
+                initialSnapshot = snapshot
+              },
+              onChunkUpdate = (snapshot: TwoLevelSparseIndex, scanned: Long, total: Long, lines: Long) => {
+                bytesScanned = scanned
+                if (total > 0L) {
+                  physicalProgress = scanned.toDouble / total.toDouble
+                }
+                if (indexerRef != null) {
+                  indexerRef.updateSparseIndex(snapshot)
+                }
+              }
+            )
+            val createdIndexer = new PhysicalLineIndexerImpl(storageReader, initialSnapshot)
+            indexerRef = createdIndexer
+
+            pFuture.whenComplete((finalIdx, err) => {
+              if (err == null && finalIdx != null) {
+                createdIndexer.updateSparseIndex(finalIdx)
+                bytesScanned = storageReader.sizeBytes
+                physicalProgress = 1.0
+                PersistentIndexCache.save(storageReader.path, storageReader, finalIdx)
+                triggerTier2(createdIndexer)
+              } else if (err != null) {
+                temporalFuturePromise.completeExceptionally(err)
+                classifierFuturePromise.completeExceptionally(err)
+                minimapFuturePromise.completeExceptionally(err)
+                latencyGapFuturePromise.complete(LatencyGapResult.empty)
+              }
+            })
+            (createdIndexer, pFuture)
+          }
+        } else if (storageReader.path != null && java.nio.file.Files.exists(storageReader.path)) {
           var initialSnapshot: TwoLevelSparseIndex = null
           val pFuture = TwoLevelSparseIndex.buildStreamingProgressive(
             storageReader.path,

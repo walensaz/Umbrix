@@ -20,7 +20,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -33,6 +32,7 @@ import umbrix.ui.menu.UmbrixDropdownMenu
 import umbrix.ui.menu.UmbrixMenuGlyph
 import umbrix.ui.menu.UmbrixMenuItem
 import umbrix.ui.menu.UmbrixMenuSeparator
+import umbrix.ui.scratchpad.ScratchpadSession
 import umbrix.ui.state.WorkspaceTab
 import umbrix.ui.theme.UmbrixTheme
 
@@ -47,7 +47,11 @@ fun TabBar(
     onSelectTab: (Int) -> Unit,
     onCloseTab: (Int) -> Unit,
     onNewTabClicked: () -> Unit,
+    availableScratchpads: List<ScratchpadSession> = emptyList(),
+    onOpenScratchpadSession: ((ScratchpadSession) -> Unit)? = null,
+    onRenameScratchpad: ((Int) -> Unit)? = null,
     onOpenFile: (() -> Unit)? = null,
+    onOpenScratchpadManager: (() -> Unit)? = null,
     onCloseOtherTabs: ((Int) -> Unit)? = null,
     onCloseAllTabs: (() -> Unit)? = null
 ) {
@@ -85,7 +89,7 @@ fun TabBar(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = tab.title,
+                        text = (if (tab.isScratchpad) "📝 " else "") + tab.title,
                         fontSize = 12.sp,
                         fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                         color = textColor
@@ -103,6 +107,17 @@ fun TabBar(
                     expanded = contextMenuTabIndex == index,
                     onDismissRequest = { contextMenuTabIndex = null }
                 ) {
+                    if (tab.isScratchpad && onRenameScratchpad != null) {
+                        UmbrixMenuItem(
+                            text = "Rename Scratchpad...",
+                            icon = { UmbrixMenuGlyph("✏️") },
+                            onClick = {
+                                contextMenuTabIndex = null
+                                onRenameScratchpad(index)
+                            }
+                        )
+                        UmbrixMenuSeparator()
+                    }
                     UmbrixMenuItem(
                         text = "Close Tab",
                         shortcut = "Ctrl+W",
@@ -140,6 +155,17 @@ fun TabBar(
                             onNewTabClicked()
                         }
                     )
+                    if (onOpenScratchpadManager != null) {
+                        UmbrixMenuItem(
+                            text = "Manage Scratchpads...",
+                            shortcut = "Ctrl+Alt+S",
+                            icon = { UmbrixMenuGlyph("📋") },
+                            onClick = {
+                                contextMenuTabIndex = null
+                                onOpenScratchpadManager()
+                            }
+                        )
+                    }
                     if (onOpenFile != null) {
                         UmbrixMenuItem(
                             text = "Open Log File...",
@@ -156,11 +182,16 @@ fun TabBar(
             Spacer(modifier = Modifier.width(2.dp))
         }
 
-        // New Tab (+) Button: Left click opens new scratchpad, right click shows options
+        // New Tab (+) Button: If existing scratchpads exist, left-click opens picker menu; otherwise creates new scratchpad
         Box {
             Tooltip(
                 tooltip = {
-                    Text("New Scratchpad (Left Click) / Open Options (Right Click)")
+                    Text(
+                        if (availableScratchpads.isNotEmpty())
+                            "Open Existing Scratchpad / Create New (+)"
+                        else
+                            "New Scratchpad (+)"
+                    )
                 }
             ) {
                 Box(
@@ -172,7 +203,13 @@ fun TabBar(
                                 isPlusMenuOpen = true
                             }
                         }
-                        .clickable { onNewTabClicked() }
+                        .clickable {
+                            if (availableScratchpads.isNotEmpty()) {
+                                isPlusMenuOpen = true
+                            } else {
+                                onNewTabClicked()
+                            }
+                        }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
@@ -191,12 +228,37 @@ fun TabBar(
                 UmbrixMenuItem(
                     text = "New Scratchpad Buffer",
                     shortcut = "Ctrl+N",
-                    icon = { UmbrixMenuGlyph("📝") },
+                    icon = { UmbrixMenuGlyph("➕") },
                     onClick = {
                         isPlusMenuOpen = false
                         onNewTabClicked()
                     }
                 )
+                if (availableScratchpads.isNotEmpty()) {
+                    UmbrixMenuSeparator()
+                    availableScratchpads.take(8).forEach { session ->
+                        val lineInfo = if (session.lineCount > 0) " (${session.lineCount} lines)" else " (empty)"
+                        UmbrixMenuItem(
+                            text = "📝 ${session.title}$lineInfo",
+                            onClick = {
+                                isPlusMenuOpen = false
+                                onOpenScratchpadSession?.invoke(session)
+                            }
+                        )
+                    }
+                }
+                UmbrixMenuSeparator()
+                if (onOpenScratchpadManager != null) {
+                    UmbrixMenuItem(
+                        text = "Manage All Scratchpads...",
+                        shortcut = "Ctrl+Alt+S",
+                        icon = { UmbrixMenuGlyph("📋") },
+                        onClick = {
+                            isPlusMenuOpen = false
+                            onOpenScratchpadManager()
+                        }
+                    )
+                }
                 if (onOpenFile != null) {
                     UmbrixMenuItem(
                         text = "Open Log File...",

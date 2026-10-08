@@ -665,26 +665,22 @@ fun LogViewportCanvas(
                                                 val frameNanos = withFrameNanos { it }
                                                 val elapsedSeconds = ((frameNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.05f)
                                                 lastFrameNanos = frameNanos
-                                                if (pointerPosition.x >= 0f &&
-                                                    (pointerPosition.x <= viewportWidthPx ||
-                                                        !SettingsManager.currentSettings.isMinimapEnabled && pointerPosition.x <= viewportWidthPx + 48f)) {
-                                                    val horizontalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.x, viewportWidthPx)
-                                                    val verticalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.y, viewportHeightPx)
+                                                val horizontalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.x, viewportWidthPx)
+                                                val verticalVelocity = SelectionEdgeScroll.edgeVelocity(pointerPosition.y, viewportHeightPx)
+                                                if (horizontalVelocity != 0f) {
                                                     val horizontalTarget = SelectionEdgeScroll.clampHorizontal(
                                                         horizontalScrollState.value.toFloat(), horizontalVelocity * elapsedSeconds,
                                                         horizontalScrollState.maxValue
                                                     )
-                                                    if (horizontalVelocity != 0f) {
-                                                        horizontalScrollState.scrollBy(horizontalTarget - horizontalScrollState.value)
-                                                    }
-                                                    if (verticalVelocity != 0f) {
-                                                        val (newTop, newOffset) = SelectionEdgeScroll.advanceVertical(
-                                                            tab.topVisibleLine, tab.subLineScrollOffsetPx, verticalVelocity * elapsedSeconds,
-                                                            rowHeightPx, totalLinesCount, visibleRowCount
-                                                        )
-                                                        tab.topVisibleLine = newTop
-                                                        tab.subLineScrollOffsetPx = newOffset
-                                                    }
+                                                    horizontalScrollState.scrollBy(horizontalTarget - horizontalScrollState.value)
+                                                }
+                                                if (verticalVelocity != 0f) {
+                                                    val (newTop, newOffset) = SelectionEdgeScroll.advanceVertical(
+                                                        tab.topVisibleLine, tab.subLineScrollOffsetPx, verticalVelocity * elapsedSeconds,
+                                                        rowHeightPx, totalLinesCount, visibleRowCount
+                                                    )
+                                                    tab.topVisibleLine = newTop
+                                                    tab.subLineScrollOffsetPx = newOffset
                                                 }
                                                 refreshSelection()
                                             }

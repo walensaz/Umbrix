@@ -53,11 +53,13 @@ import umbrix.ui.theme.ThemeRegistry
 import umbrix.ui.theme.UmbrixTheme
 
 private enum class SettingsCategory(val displayName: String, val icon: String) {
+    GENERAL("General & Workspace", "⚙️"),
     APPEARANCE("Appearance & Minimap", "🗺"),
     FONTS("Fonts & Typography", "🔤"),
     VIEW("View & Viewport", "👁"),
     LANGUAGES("Log Languages & Profiles", "🌐"),
     PERFORMANCE("Performance & SIMD", "⚡"),
+    AI_MCP("AI & MCP Connections", "🤖"),
     PLUGINS("Plugins & Analyzers", "🧩")
 }
 
@@ -70,7 +72,7 @@ fun SettingsDialog(
     onSaveSettings: (WorkstationSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var activeCategory by remember { mutableStateOf(SettingsCategory.APPEARANCE) }
+    var activeCategory by remember { mutableStateOf(SettingsCategory.GENERAL) }
 
     var themeName by remember { mutableStateOf(initialSettings.themeName) }
     var isMinimapEnabled by remember { mutableStateOf(initialSettings.isMinimapEnabled) }
@@ -107,6 +109,14 @@ fun SettingsDialog(
     var enableVimColonTrigger by remember { mutableStateOf(initialSettings.enableVimColonTrigger) }
     var enableDoubleShiftTrigger by remember { mutableStateOf(initialSettings.enableDoubleShiftTrigger) }
 
+    var isMcpServerEnabled by remember { mutableStateOf(initialSettings.isMcpServerEnabled) }
+    var mcpServerPort by remember { mutableStateOf(initialSettings.mcpServerPort.toString()) }
+    var aiProvider by remember { mutableStateOf(initialSettings.aiProvider) }
+    var aiModelName by remember { mutableStateOf(initialSettings.aiModelName) }
+    var aiEndpointUrl by remember { mutableStateOf(initialSettings.aiEndpointUrl) }
+    var aiApiKey by remember { mutableStateOf(initialSettings.aiApiKey) }
+    var restoreSessionOnStartup by remember { mutableStateOf(initialSettings.restoreSessionOnStartup) }
+
     // copy() preserves menu-driven state (recent files) not edited here
     fun buildCurrent(): WorkstationSettings = initialSettings.copy(
         themeName = themeName,
@@ -139,7 +149,14 @@ fun SettingsDialog(
         commandPaletteStyle = commandPaletteStyle,
         commandPaletteShowShortcuts = commandPaletteShowShortcuts,
         enableVimColonTrigger = enableVimColonTrigger,
-        enableDoubleShiftTrigger = enableDoubleShiftTrigger
+        enableDoubleShiftTrigger = enableDoubleShiftTrigger,
+        isMcpServerEnabled = isMcpServerEnabled,
+        mcpServerPort = mcpServerPort.toIntOrNull()?.coerceIn(1024, 65535) ?: 4242,
+        aiProvider = aiProvider,
+        aiModelName = aiModelName,
+        aiEndpointUrl = aiEndpointUrl,
+        aiApiKey = aiApiKey,
+        restoreSessionOnStartup = restoreSessionOnStartup
     )
 
     fun resetToDefaults() {
@@ -246,6 +263,117 @@ fun SettingsDialog(
                             .padding(20.dp)
                     ) {
                         when (activeCategory) {
+                            SettingsCategory.GENERAL -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "General & Workspace",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    // 1. Session Restoration Section
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Multi-Document Session & Startup",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.clickable { restoreSessionOnStartup = !restoreSessionOnStartup }
+                                        ) {
+                                            Checkbox(
+                                                checked = restoreSessionOnStartup,
+                                                onCheckedChange = { restoreSessionOnStartup = it }
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column {
+                                                Text(
+                                                    text = "Restore Previous Session on Startup",
+                                                    fontSize = 12.sp,
+                                                    color = UmbrixTheme.colors.textPrimary
+                                                )
+                                                Text(
+                                                    text = "Automatically re-opens previously open log files and active scratchpad buffer when launching Umbrix",
+                                                    fontSize = 11.sp,
+                                                    color = UmbrixTheme.colors.textMuted
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 2. Scratchpad Buffers Section
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Virtual Scratchpads",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Text(
+                                            text = "Scratchpad buffers are automatically persisted to ~/.umbrix/scratchpads/ so your investigation drafts and pinned snippets are never lost.",
+                                            fontSize = 12.sp,
+                                            color = UmbrixTheme.colors.textMuted
+                                        )
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 3. Persistent Index Disk Cache
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Persistent Sidecar Index Cache",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Text(
+                                            text = "Coordinate indexes are cached in ~/.umbrix/cache/indexes/ allowing multi-gigabyte files to re-open instantly (<1ms). Caches unused for 7+ days are automatically cleaned on startup.",
+                                            fontSize = 12.sp,
+                                            color = UmbrixTheme.colors.textMuted
+                                        )
+                                        Row {
+                                            OutlinedButton(onClick = {
+                                                val cleaned = umbrix.index.PersistentIndexCache.cleanStaleCaches(0L)
+                                                umbrix.ui.toast.ToastManager.info("Pruned $cleaned index cache files")
+                                            }) {
+                                                Text("Clear Index Caches Now")
+                                            }
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 4. Recent Files History
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "Recent Files History",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row {
+                                            OutlinedButton(onClick = {
+                                                SettingsManager.clearRecentFiles()
+                                                umbrix.ui.toast.ToastManager.info("Cleared recent files history")
+                                            }) {
+                                                Text("Clear Recent Files History")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             SettingsCategory.APPEARANCE -> {
                                 Column(
                                     modifier = Modifier
@@ -888,7 +1016,40 @@ fun SettingsDialog(
 
                                     Divider(Orientation.Horizontal)
 
-                                    // 4. Command Palette & Workflow Persona
+                                    // 4. Workstation Session Restoration
+                                    Text(
+                                        text = "Session & Multi-Document Tabs",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.clickable { restoreSessionOnStartup = !restoreSessionOnStartup }
+                                    ) {
+                                        Checkbox(
+                                            checked = restoreSessionOnStartup,
+                                            onCheckedChange = { restoreSessionOnStartup = it }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "Restore Previous Session on Startup",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Text(
+                                                text = "Automatically re-opens previously open log files and active scratchpad buffer on launch",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
+                                        }
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    // 5. Command Palette & Workflow Persona
                                     Text(
                                         text = "Command Palette & Persona",
                                         fontSize = 14.sp,
@@ -1148,6 +1309,182 @@ fun SettingsDialog(
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+
+                            SettingsCategory.AI_MCP -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .verticalScroll(rememberScrollState()),
+                                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                                ) {
+                                    Text(
+                                        text = "Embedded Model Context Protocol (MCP) Server",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+                                    Text(
+                                        text = "Allows external AI coding agents (Cursor, Claude Desktop, Antigravity, Copilot) to query active 25GB+ logs in sub-200ms without blowing their token limits.",
+                                        fontSize = 12.sp,
+                                        color = UmbrixTheme.colors.textMuted
+                                    )
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.clickable { isMcpServerEnabled = !isMcpServerEnabled }
+                                    ) {
+                                        Checkbox(
+                                            checked = isMcpServerEnabled,
+                                            onCheckedChange = { isMcpServerEnabled = it }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "Enable Embedded MCP HTTP Server",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Text(
+                                                text = "Listens on local loopback (default port: 4242). External agents connect to http://127.0.0.1:4242/mcp",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
+                                        }
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Loopback Port: ",
+                                            fontSize = 12.sp,
+                                            color = UmbrixTheme.colors.textSecondary,
+                                            modifier = Modifier.width(140.dp)
+                                        )
+                                        TextField(
+                                            value = mcpServerPort,
+                                            onValueChange = { mcpServerPort = it.filter { ch -> ch.isDigit() } },
+                                            modifier = Modifier.width(120.dp),
+                                            enabled = isMcpServerEnabled
+                                        )
+                                    }
+
+                                    Divider(Orientation.Horizontal)
+
+                                    Text(
+                                        text = "In-App AI Forensic Assistant LLM Connection",
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = UmbrixTheme.colors.textPrimary
+                                    )
+                                    Text(
+                                        text = "Configure the LLM engine for the in-app AI Forensic Assistant drawer (Ctrl+Shift+I). Works with local Ollama, LM Studio, or OpenAI-compatible cloud endpoints.",
+                                        fontSize = 12.sp,
+                                        color = UmbrixTheme.colors.textMuted
+                                    )
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "AI Engine Provider:",
+                                            fontSize = 12.sp,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            listOf("Ollama (Local)", "OpenAI Compatible", "Custom MCP").forEach { providerOption ->
+                                                val isSelected = aiProvider == providerOption
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        aiProvider = providerOption
+                                                        if (providerOption == "Ollama (Local)") {
+                                                            aiEndpointUrl = "http://localhost:11434"
+                                                            aiModelName = "llama3.2"
+                                                        } else if (providerOption == "OpenAI Compatible") {
+                                                            aiEndpointUrl = "https://api.openai.com"
+                                                            aiModelName = "gpt-4o-mini"
+                                                        }
+                                                    }
+                                                ) {
+                                                    Text(
+                                                        text = providerOption,
+                                                        color = if (isSelected) UmbrixTheme.colors.textPrimary else UmbrixTheme.colors.textMuted,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Endpoint URL:",
+                                            fontSize = 12.sp,
+                                            color = UmbrixTheme.colors.textSecondary
+                                        )
+                                        TextField(
+                                            value = aiEndpointUrl,
+                                            onValueChange = { aiEndpointUrl = it },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Model Name:",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textSecondary
+                                            )
+                                            TextField(
+                                                value = aiModelName,
+                                                onValueChange = { aiModelName = it },
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "API Key (Optional for Local Ollama):",
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textSecondary
+                                            )
+                                            TextField(
+                                                value = aiApiKey,
+                                                onValueChange = { aiApiKey = it },
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(UmbrixTheme.colors.surfaceElevated, shape = RoundedCornerShape(6.dp))
+                                            .padding(12.dp)
+                                    ) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(
+                                                text = "External Agent Connection Helper",
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp,
+                                                color = UmbrixTheme.colors.textPrimary
+                                            )
+                                            Text(
+                                                text = "To connect Cursor, Antigravity, or Claude Desktop to Umbrix, add this to your MCP config:\n{\n  \"mcpServers\": {\n    \"umbrix\": { \"url\": \"http://127.0.0.1:${mcpServerPort.ifBlank { "4242" }}/mcp\" }\n  }\n}",
+                                                fontSize = 11.sp,
+                                                color = UmbrixTheme.colors.textMuted
+                                            )
                                         }
                                     }
                                 }

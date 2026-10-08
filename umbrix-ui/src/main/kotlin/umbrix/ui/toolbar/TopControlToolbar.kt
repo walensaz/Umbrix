@@ -41,6 +41,8 @@ fun TopControlToolbar(
     onToggleSearchBar: () -> Unit,
     isTimeScrubberOpen: Boolean = false,
     onToggleTimeScrubber: () -> Unit = {},
+    isAiAssistantOpen: Boolean = false,
+    onToggleAiAssistant: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onZoomChange: (Float) -> Unit = { delta ->
         val current = SettingsManager.currentSettings
@@ -112,6 +114,16 @@ fun TopControlToolbar(
             enabled = session != null
         ) {
             Text("🕐 Time (Ctrl+T)")
+        }
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        // AI Forensic Assistant Button
+        OutlinedButton(
+            onClick = onToggleAiAssistant,
+            enabled = session != null
+        ) {
+            Text("⚡ AI (Ctrl+Shift+I)")
         }
 
         Spacer(modifier = Modifier.width(12.dp))

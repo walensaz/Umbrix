@@ -8,6 +8,7 @@ plugins {
 dependencies {
     api(project(":umbrix-core"))
     api(project(":umbrix-index"))
+    api(project(":umbrix-mcp"))
 
     implementation(compose.desktop.currentOs)
     runtimeOnly(compose.desktop.macos_arm64)

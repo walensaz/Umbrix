@@ -115,4 +115,52 @@ class TemporalCheckpointTableRangeTest extends FunSuite {
     val nearestJuly31 = table.seekNearestLine(EpochMicros(1501525416000L))
     assertEquals(nearestJuly31, LineIndex(24576L))
   }
+
+  test("tryParseTimestamp correctly parses Thunderbird log lines with epoch prefix") {
+    val line = "- 1131523501 2005.11.09 aadmin1 Nov 10 00:05:01 src@aadmin1 in.tftpd[14620]: tftp: client does not accept options\n"
+    val arena = java.lang.foreign.Arena.ofConfined()
+    try {
+      val segment = arena.allocateFrom(line)
+      val parsed = TemporalCheckpointTable.tryParseTimestamp(segment)
+      assert(parsed.isDefined, "Should successfully parse timestamp from Thunderbird log format")
+      assertEquals(parsed.get, 1131523501L * 1000000L)
+    } finally {
+      arena.close()
+    }
+  }
+
+  test("tryParseTimestamp correctly parses ISO-8601, Dotted, Syslog, and Apache CLF formats") {
+    val arena = java.lang.foreign.Arena.ofConfined()
+    try {
+      // ISO-8601 with millis
+      val isoLine = "2026-09-22 10:14:00.123 [INFO] Application started"
+      val isoParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(isoLine))
+      assert(isoParsed.isDefined)
+      val isoDt = java.time.LocalDateTime.of(2026, 9, 22, 10, 14, 0).toEpochSecond(java.time.ZoneOffset.UTC) * 1000000L + 123000L
+      assertEquals(isoParsed.get, isoDt)
+
+      // Dotted date-time
+      val dottedLine = "2005.11.09-00:05:01 [main] server ready"
+      val dottedParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(dottedLine))
+      assert(dottedParsed.isDefined)
+
+      // Syslog RFC 3164 with year in line
+      val syslogLine = "Nov 10 00:05:01 myhost in.tftpd[14620]: client connected"
+      val syslogParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(syslogLine))
+      assert(syslogParsed.isDefined)
+
+      // Apache Common Log Format
+      val clfLine = """127.0.0.1 - - [10/Nov/2005:00:05:01 +0000] "GET /index.html HTTP/1.1" 200 1234"""
+      val clfParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(clfLine))
+      assert(clfParsed.isDefined)
+
+      // Epoch millis
+      val epochMillisLine = "[1609459200000] Message logged"
+      val epochMillisParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(epochMillisLine))
+      assert(epochMillisParsed.isDefined)
+      assertEquals(epochMillisParsed.get, 1609459200000L * 1000L)
+    } finally {
+      arena.close()
+    }
+  }
 }

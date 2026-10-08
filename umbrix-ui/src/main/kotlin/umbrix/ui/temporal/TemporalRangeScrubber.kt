@@ -73,19 +73,27 @@ fun TemporalRangeScrubber(
     val lastTimestamp = session.lastTimestamp()
 
     if (!session.isTemporalDataAvailable() || !firstTimestamp.isDefined || !lastTimestamp.isDefined) {
-        // Fallback banner if temporal checkpoints are still scanning
+        val isAnalyzing = !session.isTemporalIndexComplete()
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(colors.surfacePanel)
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "🕐 Temporal index is analyzing log timestamps in background...",
-                fontSize = 11.5.sp,
-                color = colors.progressText
-            )
+            if (isAnalyzing) {
+                Text(
+                    text = "🕐 Temporal index is analyzing log timestamps in background...",
+                    fontSize = 11.5.sp,
+                    color = colors.progressText
+                )
+            } else {
+                Text(
+                    text = "⚠️ No recognized timestamps detected in this file. (Supported formats: ISO-8601, Unix Epoch, Syslog RFC 3164, Apache CLF, Dotted dates)",
+                    fontSize = 11.5.sp,
+                    color = colors.textSecondary
+                )
+            }
             Spacer(modifier = Modifier.weight(1f))
             OutlinedButton(onClick = onClose) {
                 Text("✕ Close")

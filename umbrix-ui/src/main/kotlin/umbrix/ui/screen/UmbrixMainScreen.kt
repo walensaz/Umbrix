@@ -3,8 +3,11 @@ package umbrix.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import umbrix.ui.ai.AiChatDrawer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,12 +55,14 @@ import umbrix.ui.dialog.ExportSubFileDialog
 import umbrix.ui.dialog.GoToLineDialog
 import umbrix.ui.dialog.GoToTimestampDialog
 import umbrix.ui.dialog.KeyboardShortcutsDialog
+import umbrix.ui.dialog.RenameScratchpadDialog
 import umbrix.ui.dialog.SettingsDialog
 import umbrix.ui.error.WorkstationErrorHandler
 import umbrix.ui.palette.CommandExecutionContext
 import umbrix.ui.palette.CommandPaletteDialog
 import umbrix.ui.scratchpad.ScratchpadEditorCanvas
 import umbrix.ui.scratchpad.ScratchpadManager
+import umbrix.ui.scratchpad.ScratchpadManagerDialog
 import umbrix.ui.timeline.EventTag
 import umbrix.ui.timeline.InvestigationTimelineDrawer
 import umbrix.ui.timeline.InvestigationTimelineManager
@@ -124,7 +129,10 @@ fun UmbrixMainScreen(
     val scratchpadManager = remember { ScratchpadManager() }
     var isTimelineDrawerOpen by remember { mutableStateOf(false) }
     var isBookmarkDialogOpen by remember { mutableStateOf(false) }
+    var isScratchpadManagerDialogOpen by remember { mutableStateOf(false) }
+    var renamingScratchpadTabIndex by remember { mutableStateOf<Int?>(null) }
     var isTimelineExportDialogOpen by remember { mutableStateOf(false) }
+    var isAiAssistantOpen by remember { mutableStateOf(false) }
 
     var isIndexingActive by remember { mutableStateOf(false) }
     var statusMessageText by remember { mutableStateOf("Ready — No log file loaded.") }
@@ -143,6 +151,32 @@ fun UmbrixMainScreen(
     val currentTab: WorkspaceTab? = openTabs.getOrNull(activeTabIndex)
     val activeSession: LogSession? = currentTab?.session
 
+    val toolRegistry = remember {
+        umbrix.mcp.tools.ForensicToolRegistry {
+            openTabs.getOrNull(activeTabIndex)?.session?.let { scala.Option.apply(it) } ?: scala.Option.empty()
+        }
+    }
+    val aiCoordinator = remember { umbrix.ui.ai.AiAssistantCoordinator(toolRegistry) }
+
+    val currentSettings = SettingsManager.currentSettings
+
+    // Start embedded MCP HTTP Server if enabled in workstation settings
+    DisposableEffect(currentSettings.isMcpServerEnabled, currentSettings.mcpServerPort) {
+        val server = if (currentSettings.isMcpServerEnabled) {
+            try {
+                val s = umbrix.mcp.server.McpHttpServer(currentSettings.mcpServerPort, toolRegistry)
+                s.start()
+                s
+            } catch (e: Exception) {
+                null
+            }
+        } else null
+
+        onDispose {
+            server?.close()
+        }
+    }
+
     fun loadLogFile(selectedPath: String, asNewTab: Boolean = true) {
         val targetPath = selectedPath.trim()
         if (targetPath.isBlank()) return
@@ -154,9 +188,6 @@ fun UmbrixMainScreen(
             return
         }
 
-        if (isIndexingActive) return
-
-        isIndexingActive = true
         statusMessageText = "Opening ${targetFile.name}..."
 
         coroutineScope.launch {
@@ -182,7 +213,10 @@ fun UmbrixMainScreen(
                     }
                 }
 
-                SettingsManager.recordRecentFile(targetFile.absolutePath)
+                val allOpenFiles = openTabs.filter { !it.isScratchpad && it.filePath.isNotBlank() && !it.filePath.startsWith("scratch://") }.map { it.filePath }
+                SettingsManager.updateSettings(
+                    SettingsManager.currentSettings.copy(lastOpenedFiles = allOpenFiles).withRecentFile(targetFile.absolutePath)
+                )
                 val formattedSize = formatByteSize(newSession.fileSizeBytes())
                 val initialLines = formatNumberWithCommas((newSession.totalLines() as Number).toLong())
                 statusMessageText = "Opened ${targetFile.name} ($formattedSize, $initialLines initial lines preview) in ${newSession.indexingDurationMs()} ms"
@@ -243,6 +277,12 @@ fun UmbrixMainScreen(
                     WorkstationErrorHandler.reportException(e)
                 }
             }
+            val remainingFiles = openTabs.filter { !it.isScratchpad && it.filePath.isNotBlank() && !it.filePath.startsWith("scratch://") }.map { it.filePath }
+            val activeScratchpad = openTabs.getOrNull(activeTabIndex)?.scratchpadSession?.id
+            SettingsManager.updateSettings(
+                SettingsManager.currentSettings.copy(lastOpenedFiles = remainingFiles, lastActiveScratchpadId = activeScratchpad)
+            )
+
             if (openTabs.isEmpty()) {
                 activeTabIndex = 0
                 statusMessageText = "All tabs closed. Ready."
@@ -252,6 +292,23 @@ fun UmbrixMainScreen(
         } catch (e: Throwable) {
             if (ForensicErrorReportGenerator.isFatal(e)) throw e
             WorkstationErrorHandler.reportException(e)
+        }
+    }
+
+    fun openOrCreateTabForScratchpad(session: umbrix.ui.scratchpad.ScratchpadSession) {
+        val existingTabIndex = openTabs.indexOfFirst { it.scratchpadSession?.id == session.id }
+        if (existingTabIndex >= 0) {
+            activeTabIndex = existingTabIndex
+            ToastManager.info("Switched to ${session.title}")
+        } else {
+            val newTab = WorkspaceTab(
+                session = null,
+                filePath = session.diskPath ?: "scratch://${session.title}",
+                scratchpadSession = session
+            )
+            openTabs.add(newTab)
+            activeTabIndex = openTabs.size - 1
+            ToastManager.info("Opened ${session.title}")
         }
     }
 
@@ -747,6 +804,9 @@ fun UmbrixMainScreen(
                     statusMessageText = "Opened new scratchpad ${s.title}"
                     ToastManager.info("Opened new scratchpad ${s.title}")
                 }
+                is MenuAction.OpenScratchpadManager -> {
+                    isScratchpadManagerDialogOpen = true
+                }
                 is MenuAction.OpenRecentFile -> loadLogFile(action.path, asNewTab = true)
                 is MenuAction.ClearRecentFiles -> statusMessageText = "Cleared recent files."
                 is MenuAction.ExportSubFile -> {
@@ -1008,6 +1068,10 @@ fun UmbrixMainScreen(
                         isTimelineDrawerOpen = !isTimelineDrawerOpen
                         true
                     }
+                    isCtrlOrCmd && keyEvent.isShiftPressed && keyEvent.key == Key.I -> {
+                        isAiAssistantOpen = !isAiAssistantOpen
+                        true
+                    }
                     isCtrlOrCmd && keyEvent.key == Key.N -> {
                         val s = scratchpadManager.createSession()
                         val newTab = WorkspaceTab(
@@ -1018,6 +1082,10 @@ fun UmbrixMainScreen(
                         openTabs.add(newTab)
                         activeTabIndex = openTabs.size - 1
                         ToastManager.info("Created ${s.title}")
+                        true
+                    }
+                    isCtrlOrCmd && keyEvent.isAltPressed && keyEvent.key == Key.S -> {
+                        isScratchpadManagerDialogOpen = true
                         true
                     }
                     isCtrlOrCmd && keyEvent.key == Key.B -> {
@@ -1106,9 +1174,46 @@ fun UmbrixMainScreen(
         onActiveDocTitleChange(currentTab?.title)
     }
 
+    var isInitialSessionRestored by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
+        // 1. Asynchronously prune 7+ day old disk index caches on startup
+        withContext(Dispatchers.IO) {
+            try {
+                umbrix.index.PersistentIndexCache.cleanStaleCaches(7L * 24L * 3600L * 1000L)
+            } catch (_: Throwable) {}
+        }
+
+        // 2. Open file or restore previous workspace session
         if (!initialFilePath.isNullOrBlank()) {
             loadLogFile(initialFilePath, asNewTab = true)
+        } else if (SettingsManager.currentSettings.restoreSessionOnStartup) {
+            val filesToRestore = SettingsManager.currentSettings.lastOpenedFiles.filter { File(it).exists() }
+            for (f in filesToRestore) {
+                loadLogFile(f, asNewTab = true)
+            }
+            val targetScratchId = SettingsManager.currentSettings.lastActiveScratchpadId
+            if (targetScratchId != null) {
+                scratchpadManager.getSession(targetScratchId)?.let { s ->
+                    openOrCreateTabForScratchpad(s)
+                }
+            }
+        }
+        delay(250)
+        isInitialSessionRestored = true
+    }
+
+    LaunchedEffect(openTabs.size, activeTabIndex, openTabs.map { it.filePath }, isInitialSessionRestored) {
+        if (isInitialSessionRestored && SettingsManager.currentSettings.restoreSessionOnStartup) {
+            val activeFiles = openTabs.filter { !it.isScratchpad && it.filePath.isNotBlank() && !it.filePath.startsWith("scratch://") }.map { it.filePath }
+            val activeScratchpadId = openTabs.getOrNull(activeTabIndex)?.scratchpadSession?.id
+            val updated = SettingsManager.currentSettings.copy(
+                lastOpenedFiles = activeFiles,
+                lastActiveScratchpadId = activeScratchpadId
+            )
+            if (updated != SettingsManager.currentSettings) {
+                SettingsManager.updateSettings(updated)
+            }
         }
     }
 
@@ -1145,17 +1250,13 @@ fun UmbrixMainScreen(
             onCloseTab = { index -> closeTab(index) },
             onNewTabClicked = {
                 val s = scratchpadManager.createSession()
-                val newTab = WorkspaceTab(
-                    session = null,
-                    filePath = "scratch://${s.title}",
-                    scratchpadSession = s
-                )
-                openTabs.add(newTab)
-                activeTabIndex = openTabs.size - 1
-                statusMessageText = "Opened new scratchpad ${s.title}"
-                ToastManager.info("Opened new scratchpad ${s.title}")
+                openOrCreateTabForScratchpad(s)
             },
+            availableScratchpads = scratchpadManager.sessions,
+            onOpenScratchpadSession = { s -> openOrCreateTabForScratchpad(s) },
+            onRenameScratchpad = { idx -> renamingScratchpadTabIndex = idx },
             onOpenFile = { openFileViaNativeDialog() },
+            onOpenScratchpadManager = { isScratchpadManagerDialogOpen = true },
             onCloseOtherTabs = { keepIndex ->
                 if (keepIndex in openTabs.indices) {
                     val keepTab = openTabs[keepIndex]
@@ -1293,42 +1394,38 @@ fun UmbrixMainScreen(
 
         Divider(Orientation.Horizontal)
 
-        // --- Center Log Viewport Canvas or Welcome Screen ---
-        if (openTabs.isEmpty() || currentTab == null) {
-            WelcomeScreen(
-                onOpenFileClicked = {
-                    val chosenPath = showNativeOpenFileDialog()
-                    if (chosenPath != null) {
-                        loadLogFile(chosenPath, asNewTab = true)
-                    }
-                },
-                onSelectRecentFile = { recentPath ->
-                    loadLogFile(recentPath, asNewTab = true)
-                },
-                onClearRecentFiles = {
-                    SettingsManager.clearRecentFiles()
-                    ToastManager.info("Recent file history cleared.")
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            )
-        } else if (currentTab.isScratchpad) {
-            ScratchpadEditorCanvas(
-                session = currentTab.scratchpadSession!!,
-                onSaveRequested = {
-                    ToastManager.success("Saved ${currentTab.scratchpadSession!!.title}")
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            )
-        } else {
-            LogViewportCanvas(
-                tab = currentTab,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+        // --- Center Log Viewport Canvas and AI Chat Drawer ---
+        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                if (openTabs.isEmpty() || currentTab == null) {
+                    WelcomeScreen(
+                        onOpenFileClicked = {
+                            val chosenPath = showNativeOpenFileDialog()
+                            if (chosenPath != null) {
+                                loadLogFile(chosenPath, asNewTab = true)
+                            }
+                        },
+                        onSelectRecentFile = { recentPath ->
+                            loadLogFile(recentPath, asNewTab = true)
+                        },
+                        onClearRecentFiles = {
+                            SettingsManager.clearRecentFiles()
+                            ToastManager.info("Recent file history cleared.")
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (currentTab.isScratchpad) {
+                    ScratchpadEditorCanvas(
+                        session = currentTab.scratchpadSession!!,
+                        onSaveRequested = {
+                            ToastManager.success("Saved ${currentTab.scratchpadSession!!.title}")
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    LogViewportCanvas(
+                        tab = currentTab,
+                        modifier = Modifier.fillMaxSize(),
                 onFilterByText = { text ->
                     currentTab?.isFilteredView = true
                     isSearchBarVisible = true
@@ -1398,6 +1495,22 @@ fun UmbrixMainScreen(
                 onOpenFile = { openFileViaNativeDialog() },
                 onNewScratchpad = { handleMenuAction(MenuAction.NewScratchpad) },
                 onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) }
+            )
+        }
+            }
+
+            // AI Forensic Assistant Drawer (Ctrl+Shift+I)
+            AiChatDrawer(
+                isOpen = isAiAssistantOpen,
+                onClose = { isAiAssistantOpen = false },
+                coordinator = aiCoordinator,
+                session = activeSession,
+                settings = currentSettings,
+                onJumpToLine = { line: Long ->
+                    currentTab?.selectedLineIndex = line
+                    currentTab?.topVisibleLine = (line - 10).coerceAtLeast(0L)
+                    ToastManager.info("Jumped to Line #$line")
+                }
             )
         }
 
@@ -1667,6 +1780,7 @@ fun UmbrixMainScreen(
                     activeTabIndex = openTabs.size - 1
                     ToastManager.info("Created ${s.title}")
                 },
+                onOpenScratchpadManager = { isScratchpadManagerDialogOpen = true },
                 onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) },
                 onExpandAllEvents = {
                     currentTab?.expandAllEvents()
@@ -1675,12 +1789,59 @@ fun UmbrixMainScreen(
                 onCollapseAllEvents = {
                     currentTab?.collapseAllEvents()
                     ToastManager.info("Collapsed all multi-line events in active tab")
+                },
+                onToggleAiAssistant = {
+                    isAiAssistantOpen = !isAiAssistantOpen
                 }
             ),
             onDismiss = {
                 isCommandPaletteVisible = false
                 commandPaletteInitialQuery = ""
             }
+        )
+    }
+
+    // --- Scratchpad Manager Modal Dialog ---
+    if (isScratchpadManagerDialogOpen) {
+        val openScratchpadIds = openTabs.mapNotNull { it.scratchpadSession?.id }.toSet()
+        ScratchpadManagerDialog(
+            scratchpadManager = scratchpadManager,
+            openScratchpadIds = openScratchpadIds,
+            onOpenScratchpad = { session ->
+                val existingTabIndex = openTabs.indexOfFirst { it.scratchpadSession?.id == session.id }
+                if (existingTabIndex >= 0) {
+                    activeTabIndex = existingTabIndex
+                    ToastManager.info("Switched to ${session.title}")
+                } else {
+                    val newTab = WorkspaceTab(
+                        session = null,
+                        filePath = session.diskPath ?: "scratch://${session.title}",
+                        scratchpadSession = session
+                    )
+                    openTabs.add(newTab)
+                    activeTabIndex = openTabs.size - 1
+                    ToastManager.info("Opened ${session.title}")
+                }
+            },
+            onNewScratchpad = {
+                val s = scratchpadManager.createSession()
+                val newTab = WorkspaceTab(
+                    session = null,
+                    filePath = "scratch://${s.title}",
+                    scratchpadSession = s
+                )
+                openTabs.add(newTab)
+                activeTabIndex = openTabs.size - 1
+                ToastManager.info("Created ${s.title}")
+            },
+            onDeleteScratchpad = { session ->
+                val tabIndex = openTabs.indexOfFirst { it.scratchpadSession?.id == session.id }
+                if (tabIndex >= 0) {
+                    closeTab(tabIndex)
+                }
+                scratchpadManager.deleteSession(session)
+            },
+            onDismiss = { isScratchpadManagerDialogOpen = false }
         )
     }
 
@@ -1724,6 +1885,26 @@ fun UmbrixMainScreen(
             },
             onDismiss = { isTimelineExportDialogOpen = false }
         )
+    }
+
+    // --- Rename Scratchpad Modal Dialog ---
+    renamingScratchpadTabIndex?.let { tabIndex ->
+        val tab = openTabs.getOrNull(tabIndex)
+        val scratchpad = tab?.scratchpadSession
+        if (scratchpad != null) {
+            RenameScratchpadDialog(
+                currentTitle = scratchpad.title,
+                onConfirm = { newTitle ->
+                    scratchpad.title = newTitle
+                    scratchpadManager.renameSession(scratchpad.id, newTitle)
+                    ToastManager.info("Renamed scratchpad to $newTitle")
+                    renamingScratchpadTabIndex = null
+                },
+                onDismiss = { renamingScratchpadTabIndex = null }
+            )
+        } else {
+            renamingScratchpadTabIndex = null
+        }
     }
 
     // --- Floating Toast Notifications Host ---

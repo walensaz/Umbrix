@@ -131,6 +131,17 @@ object SettingsManager {
         var enableVimColonTrigger = true
         var enableDoubleShiftTrigger = true
 
+        var isMcpServerEnabled = true
+        var mcpServerPort = 4242
+        var aiProvider = "Ollama (Local)"
+        var aiModelName = "llama3.2"
+        var aiEndpointUrl = "http://localhost:11434"
+        var aiApiKey = ""
+
+        var restoreSessionOnStartup = true
+        var lastOpenedFiles = emptyList<String>()
+        var lastActiveScratchpadId: String? = null
+
         val lines = json.lines()
         for (line in lines) {
             val trimmed = line.trim().trimEnd(',')
@@ -170,6 +181,22 @@ object SettingsManager {
                     "commandPaletteShowShortcuts" -> commandPaletteShowShortcuts = value.toBooleanStrictOrNull() ?: true
                     "enableVimColonTrigger" -> enableVimColonTrigger = value.toBooleanStrictOrNull() ?: true
                     "enableDoubleShiftTrigger" -> enableDoubleShiftTrigger = value.toBooleanStrictOrNull() ?: true
+                    "isMcpServerEnabled" -> isMcpServerEnabled = value.toBooleanStrictOrNull() ?: true
+                    "mcpServerPort" -> mcpServerPort = value.toIntOrNull()?.coerceIn(1024, 65535) ?: 4242
+                    "aiProvider" -> aiProvider = value
+                    "aiModelName" -> aiModelName = value
+                    "aiEndpointUrl" -> aiEndpointUrl = value
+                    "aiApiKey" -> aiApiKey = value
+                    "restoreSessionOnStartup" -> restoreSessionOnStartup = value.toBooleanStrictOrNull() ?: true
+                    "lastActiveScratchpadId" -> lastActiveScratchpadId = if (value.isBlank()) null else value
+                    "lastOpenedFiles" -> {
+                        val rawEscapedValue = trimmed.substring(colonIdx + 1).trim().removeSurrounding("\"")
+                        lastOpenedFiles = unescapeJsonString(rawEscapedValue)
+                            .split(RECENT_FILES_SEPARATOR)
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() }
+                            .distinct()
+                    }
                     "recentFiles" -> {
                         // Raw value keeps escaped quotes intact; only the enclosing quote pair is stripped
                         val rawEscapedValue = trimmed.substring(colonIdx + 1).trim().removeSurrounding("\"")
@@ -216,7 +243,16 @@ object SettingsManager {
             commandPaletteStyle = commandPaletteStyle,
             commandPaletteShowShortcuts = commandPaletteShowShortcuts,
             enableVimColonTrigger = enableVimColonTrigger,
-            enableDoubleShiftTrigger = enableDoubleShiftTrigger
+            enableDoubleShiftTrigger = enableDoubleShiftTrigger,
+            isMcpServerEnabled = isMcpServerEnabled,
+            mcpServerPort = mcpServerPort,
+            aiProvider = aiProvider,
+            aiModelName = aiModelName,
+            aiEndpointUrl = aiEndpointUrl,
+            aiApiKey = aiApiKey,
+            restoreSessionOnStartup = restoreSessionOnStartup,
+            lastOpenedFiles = lastOpenedFiles,
+            lastActiveScratchpadId = lastActiveScratchpadId
         )
     }
 
@@ -251,9 +287,17 @@ object SettingsManager {
             appendLine("  \"statusBarShowIndexingDetails\": ${s.statusBarShowIndexingDetails},")
             appendLine("  \"statusBarShowMemory\": ${s.statusBarShowMemory},")
             appendLine("  \"commandPaletteStyle\": \"${s.commandPaletteStyle.id}\",")
-            appendLine("  \"commandPaletteShowShortcuts\": ${s.commandPaletteShowShortcuts},")
             appendLine("  \"enableVimColonTrigger\": ${s.enableVimColonTrigger},")
             appendLine("  \"enableDoubleShiftTrigger\": ${s.enableDoubleShiftTrigger},")
+            appendLine("  \"isMcpServerEnabled\": ${s.isMcpServerEnabled},")
+            appendLine("  \"mcpServerPort\": ${s.mcpServerPort},")
+            appendLine("  \"aiProvider\": \"${s.aiProvider.replace("\"", "\\\"")}\",")
+            appendLine("  \"aiModelName\": \"${s.aiModelName.replace("\"", "\\\"")}\",")
+            appendLine("  \"aiEndpointUrl\": \"${s.aiEndpointUrl.replace("\"", "\\\"")}\",")
+            appendLine("  \"aiApiKey\": \"${s.aiApiKey.replace("\"", "\\\"")}\",")
+            appendLine("  \"restoreSessionOnStartup\": ${s.restoreSessionOnStartup},")
+            appendLine("  \"lastActiveScratchpadId\": \"${s.lastActiveScratchpadId ?: ""}\",")
+            appendLine("  \"lastOpenedFiles\": \"${escapeJsonString(s.lastOpenedFiles.joinToString(RECENT_FILES_SEPARATOR))}\",")
             appendLine("  \"recentFiles\": \"${escapeJsonString(s.recentFiles.joinToString(RECENT_FILES_SEPARATOR))}\"")
             appendLine("}")
         }

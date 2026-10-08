@@ -41,9 +41,11 @@ data class CommandExecutionContext(
     val onPrevBookmark: (() -> Unit)? = null,
     val onOpenBookmarkManager: (() -> Unit)? = null,
     val onNewScratchpad: (() -> Unit)? = null,
+    val onOpenScratchpadManager: (() -> Unit)? = null,
     val onToggleBookmarkFilter: (() -> Unit)? = null,
     val onExpandAllEvents: (() -> Unit)? = null,
-    val onCollapseAllEvents: (() -> Unit)? = null
+    val onCollapseAllEvents: (() -> Unit)? = null,
+    val onToggleAiAssistant: (() -> Unit)? = null
 )
 
 /**
@@ -80,6 +82,18 @@ object CommandRegistry {
                     shortcutHint = "Ctrl+N",
                     keywords = listOf("scratchpad", "notes", "buffer", "editor", "new"),
                     action = ctx.onNewScratchpad
+                )
+            )
+        }
+        if (ctx.onOpenScratchpadManager != null) {
+            commands.add(
+                PaletteCommand(
+                    id = "file.manage_scratchpads",
+                    title = "File: Manage Scratchpads & Extracted Slices...",
+                    category = CommandCategory.FILES,
+                    shortcutHint = "Ctrl+Alt+S",
+                    keywords = listOf("scratchpad", "notes", "slices", "reopen", "delete", "snippets", "manage"),
+                    action = ctx.onOpenScratchpadManager
                 )
             )
         }
@@ -336,6 +350,18 @@ object CommandRegistry {
                     category = CommandCategory.ACTIONS,
                     keywords = listOf("timeline", "export", "markdown", "report", "incident"),
                     action = ctx.onExportTimelineReport
+                )
+            )
+        }
+        if (ctx.onToggleAiAssistant != null) {
+            commands.add(
+                PaletteCommand(
+                    id = "view.toggle_ai_assistant",
+                    title = "AI: Toggle Forensic AI Assistant Drawer",
+                    category = CommandCategory.ACTIONS,
+                    shortcutHint = "Ctrl+Shift+I",
+                    keywords = listOf("ai", "assistant", "chat", "forensics", "ollama", "mcp"),
+                    action = ctx.onToggleAiAssistant
                 )
             )
         }

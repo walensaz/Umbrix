@@ -46,7 +46,20 @@ data class WorkstationSettings(
     val commandPaletteStyle: CommandPaletteStyle = CommandPaletteStyle.OMNI,
     val commandPaletteShowShortcuts: Boolean = true,
     val enableVimColonTrigger: Boolean = true,
-    val enableDoubleShiftTrigger: Boolean = true
+    val enableDoubleShiftTrigger: Boolean = true,
+
+    // --- Phase 6: MCP Server & In-App AI Assistant Configuration ---
+    val isMcpServerEnabled: Boolean = true,
+    val mcpServerPort: Int = 4242,
+    val aiProvider: String = "Ollama (Local)",
+    val aiModelName: String = "llama3.2",
+    val aiEndpointUrl: String = "http://localhost:11434",
+    val aiApiKey: String = "",
+
+    // --- Session Persistence & Restoration ---
+    val restoreSessionOnStartup: Boolean = true,
+    val lastOpenedFiles: List<String> = emptyList(),
+    val lastActiveScratchpadId: String? = null
 ) {
     /**
      * Returns a copy with [filePath] promoted to the head of [recentFiles], de-duplicated

@@ -12,6 +12,7 @@ sealed interface MenuAction {
     // --- File Operations ---
     data object OpenFile : MenuAction
     data object NewScratchpad : MenuAction
+    data object OpenScratchpadManager : MenuAction
     data class OpenRecentFile(val path: String) : MenuAction
     data object ClearRecentFiles : MenuAction
     data object ExportSubFile : MenuAction

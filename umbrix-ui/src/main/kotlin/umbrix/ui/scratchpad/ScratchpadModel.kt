@@ -20,6 +20,22 @@ class ScratchpadSession(
     var content by mutableStateOf(initialContent)
     var isDirty by mutableStateOf(false)
     var diskPath by mutableStateOf<String?>(null)
+    val createdAt: Long = System.currentTimeMillis()
+    var snippetCount by mutableStateOf(if (initialContent.isNotBlank()) 1 else 0)
+
+    val lineCount: Int
+        get() = if (content.isEmpty()) 0 else content.count { it == '\n' } + 1
+
+    val charCount: Int
+        get() = content.length
+
+    val previewSnippet: String
+        get() {
+            if (content.isBlank()) return "(Empty scratchpad buffer)"
+            val lines = content.lines().filter { it.isNotBlank() }
+            val sample = lines.take(4).joinToString("\n")
+            return if (sample.length > 250) sample.take(250) + "..." else sample
+        }
 
     fun appendSnippet(
         sourceTitle: String,
@@ -36,6 +52,7 @@ class ScratchpadSession(
         val block = "$header$clamped\n\n"
 
         content = if (content.isEmpty()) block else "$content\n$block"
+        snippetCount++
         isDirty = true
     }
 

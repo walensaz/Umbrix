@@ -41,6 +41,13 @@ fun ColumnScope.HamburgerMenuContent(
         onClick = { onAction(MenuAction.NewScratchpad) }
     )
 
+    UmbrixMenuItem(
+        text = "Manage Scratchpads...",
+        shortcut = "Ctrl+Alt+S",
+        icon = { UmbrixMenuGlyph("📋") },
+        onClick = { onAction(MenuAction.OpenScratchpadManager) }
+    )
+
     UmbrixSubMenu(
         text = "Open Recent",
         icon = { UmbrixMenuGlyph("🕘") }
