@@ -240,11 +240,11 @@ class TemporalCheckpointTable(
           endSearchResult
         } else {
           val ins = -(endSearchResult + 1)
-          if (ins > 0) ins - 1 else 0
+          if (ins < epochMicros.size()) ins else epochMicros.size() - 1
         }
 
         val startLine = if (s <= minMicrosVal) LineIndex.Zero else LineIndex(lineIndices.getLong(startIdx))
-        val endLine = if (e >= maxMicrosVal) maxLineBound else LineIndex(lineIndices.getLong(endIdx))
+        val endLine = if (e >= maxMicrosVal || endIdx >= epochMicros.size() - 1) maxLineBound else LineIndex(lineIndices.getLong(endIdx))
 
         if (endLine < startLine) {
           (endLine, startLine)
@@ -266,7 +266,7 @@ class TemporalCheckpointTable(
           endSearchResult
         } else {
           val ins = -(endSearchResult + 1)
-          if (ins > 0) ins - 1 else 0
+          if (ins < sortedTimestamps.length) ins else sortedTimestamps.length - 1
         }
 
         if (startSortedIdx > endSortedIdx) {
@@ -289,7 +289,7 @@ class TemporalCheckpointTable(
           }
 
           val resolvedMin = if (s <= minMicrosVal) LineIndex.Zero else LineIndex(minLine)
-          val resolvedMax = if (e >= maxMicrosVal) maxLineBound else LineIndex(maxLine)
+          val resolvedMax = if (e >= maxMicrosVal || endSortedIdx >= sortedTimestamps.length - 1) maxLineBound else LineIndex(maxLine)
 
           if (resolvedMax < resolvedMin) {
             (resolvedMax, resolvedMin)

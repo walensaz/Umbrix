@@ -13,12 +13,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.IntOffset
@@ -287,6 +294,16 @@ fun LogViewportContextMenu(
                     )
                 }
 
+                if (hasSelection && onNewScratchpadFromSelection != null) {
+                    ContextMenuItem(
+                        icon = "📝",
+                        label = "New Scratchpad from Selection",
+                        shortcut = null,
+                        onClick = {
+                            onNewScratchpadFromSelection(state.selectedText!!)
+                            onDismiss()
+                        }
+                    )
                 }
 
                 // 9. Workstation File & Scratchpad Actions
@@ -323,7 +340,9 @@ fun LogViewportContextMenu(
             }
         }
     }
+}
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun ContextMenuItem(
     icon: String,
@@ -331,11 +350,18 @@ private fun ContextMenuItem(
     shortcut: String?,
     onClick: () -> Unit
 ) {
+    var isHovered by remember { mutableStateOf(false) }
+    val backgroundColor = if (isHovered) UmbrixTheme.colors.menuItemHover else Color.Transparent
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+            .background(color = backgroundColor, shape = RoundedCornerShape(4.dp))
+            .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+            .onPointerEvent(PointerEventType.Exit) { isHovered = false }
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text = icon, fontSize = 12.sp)

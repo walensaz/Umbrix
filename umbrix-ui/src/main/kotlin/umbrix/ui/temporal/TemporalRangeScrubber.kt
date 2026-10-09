@@ -106,25 +106,40 @@ fun TemporalRangeScrubber(
     val maxMicros = (lastTimestamp.get() as Number).toLong()
     val totalSpanMicros = max(1L, maxMicros - minMicros)
 
-    // Range fractions [0.0, 1.0]
-    var startFraction by remember {
+    val startFractionState = remember(tab.filePath) {
         val initialStart = if (tab.isTemporalFocusActive && tab.temporalFocusStartMicros >= minMicros) {
             ((tab.temporalFocusStartMicros - minMicros).toDouble() / totalSpanMicros.toDouble()).coerceIn(0.0, 1.0)
         } else 0.0
         mutableStateOf(initialStart.toFloat())
     }
 
-    var endFraction by remember {
+    val endFractionState = remember(tab.filePath) {
         val initialEnd = if (tab.isTemporalFocusActive && tab.temporalFocusEndMicros <= maxMicros && tab.temporalFocusEndMicros > minMicros) {
             ((tab.temporalFocusEndMicros - minMicros).toDouble() / totalSpanMicros.toDouble()).coerceIn(0.0, 1.0)
         } else 1.0
         mutableStateOf(initialEnd.toFloat())
     }
 
+    LaunchedEffect(tab.isTemporalFocusActive, tab.temporalFocusStartMicros, tab.temporalFocusEndMicros, minMicros, maxMicros, totalSpanMicros) {
+        if (tab.isTemporalFocusActive && tab.temporalFocusStartMicros >= minMicros) {
+            startFractionState.value = ((tab.temporalFocusStartMicros - minMicros).toDouble() / totalSpanMicros.toDouble()).coerceIn(0.0, 1.0).toFloat()
+        } else if (!tab.isTemporalFocusActive) {
+            startFractionState.value = 0f
+        }
+        if (tab.isTemporalFocusActive && tab.temporalFocusEndMicros <= maxMicros && tab.temporalFocusEndMicros > minMicros) {
+            endFractionState.value = ((tab.temporalFocusEndMicros - minMicros).toDouble() / totalSpanMicros.toDouble()).coerceIn(0.0, 1.0).toFloat()
+        } else if (!tab.isTemporalFocusActive) {
+            endFractionState.value = 1f
+        }
+    }
+
+    val startFraction = startFractionState.value
+    val endFraction = endFractionState.value
+
     val currentStartMicros = minMicros + (startFraction.toDouble() * totalSpanMicros.toDouble()).toLong()
     val currentEndMicros = minMicros + (endFraction.toDouble() * totalSpanMicros.toDouble()).toLong()
 
-    val lineBounds = remember(startFraction, endFraction) {
+    val lineBounds = remember(startFraction, endFraction, minMicros, maxMicros, totalSpanMicros) {
         session.seekLineRangeBounds(currentStartMicros, currentEndMicros)
     }
     val selectedLineCount = max(0L, lineBounds[1] - lineBounds[0] + 1L)
@@ -201,8 +216,8 @@ fun TemporalRangeScrubber(
                 Spacer(modifier = Modifier.width(6.dp))
                 OutlinedButton(
                     onClick = {
-                        startFraction = 0f
-                        endFraction = 1f
+                        startFractionState.value = 0f
+                        endFractionState.value = 1f
                         onClearTrim()
                     }
                 ) {
@@ -236,21 +251,21 @@ fun TemporalRangeScrubber(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(28.dp)
-                    .pointerInput(trackWidth, totalSpanMicros) {
+                    .pointerInput(trackWidth, totalSpanMicros, startFractionState, endFractionState) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             down.consume()
                             val clickRatio = (down.position.x / trackWidth).coerceIn(0f, 1f)
 
                             // Pick whichever handle is closer to the initial click
-                            val distToStart = abs(clickRatio - startFraction)
-                            val distToEnd = abs(clickRatio - endFraction)
+                            val distToStart = abs(clickRatio - startFractionState.value)
+                            val distToEnd = abs(clickRatio - endFractionState.value)
                             val isDraggingStart = distToStart <= distToEnd
 
                             if (isDraggingStart) {
-                                startFraction = clickRatio.coerceAtMost(endFraction)
+                                startFractionState.value = clickRatio.coerceAtMost(endFractionState.value)
                             } else {
-                                endFraction = clickRatio.coerceAtLeast(startFraction)
+                                endFractionState.value = clickRatio.coerceAtLeast(startFractionState.value)
                             }
 
                             while (true) {
@@ -261,9 +276,9 @@ fun TemporalRangeScrubber(
 
                                 val currentRatio = (change.position.x / trackWidth).coerceIn(0f, 1f)
                                 if (isDraggingStart) {
-                                    startFraction = currentRatio.coerceAtMost(endFraction)
+                                    startFractionState.value = currentRatio.coerceAtMost(endFractionState.value)
                                 } else {
-                                    endFraction = currentRatio.coerceAtLeast(startFraction)
+                                    endFractionState.value = currentRatio.coerceAtLeast(startFractionState.value)
                                 }
                             }
                         }

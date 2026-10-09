@@ -66,12 +66,16 @@ class FilteredLineView(
    * Translates a physical line number to its closest virtual row index.
    */
   def virtualIndexForPhysicalLine(physicalLine: LineIndex): LineIndex = {
-    val rank: Long = matchingLines.rankLong(physicalLine.value)
-    val result: Long = if (matchingLines.contains(physicalLine.value)) {
-      (rank - 1L).max(0L)
+    if (physicalLine < LineIndex.Zero || matchingLines.isEmpty) {
+      LineIndex.Zero
     } else {
-      rank.min((totalFilteredLines.value - 1L).max(0L))
+      val rank: Long = matchingLines.rankLong(physicalLine.value)
+      val result: Long = if (matchingLines.contains(physicalLine.value)) {
+        (rank - 1L).max(0L)
+      } else {
+        rank.min((totalFilteredLines.value - 1L).max(0L))
+      }
+      LineIndex(result)
     }
-    LineIndex(result)
   }
 }

@@ -36,11 +36,13 @@ case class SearchResult(
    * Executes via fast Roaring64NavigableMap bitwise range intersection without materializing line objects.
    */
   def constrainToRange(startLine: Long, endLine: Long): SearchResult = {
-    if (matchingLines.isEmpty || startLine > endLine) {
+    val s = math.max(0L, startLine)
+    val e = math.max(0L, endLine)
+    if (matchingLines.isEmpty || s > e) {
       copy(matchingLines = new Roaring64NavigableMap(), totalMatches = 0L)
     } else {
       val boundedBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
-      boundedBitmap.addRange(startLine, endLine + 1L)
+      boundedBitmap.addRange(s, e + 1L)
       boundedBitmap.and(matchingLines)
       copy(
         matchingLines = boundedBitmap,
@@ -59,12 +61,13 @@ case class SearchResult(
    * @return primitive 0-based line index, or -1L if no match exists
    */
   def findNextLine(startLine: Long): Long = {
-    if (matchingLines.isEmpty || startLine > matchingLines.last) {
+    val s = math.max(0L, startLine)
+    if (matchingLines.isEmpty || s > matchingLines.last) {
       -1L
-    } else if (matchingLines.contains(startLine)) {
-      startLine
+    } else if (matchingLines.contains(s)) {
+      s
     } else {
-      val rank: Long = matchingLines.rankLong(startLine)
+      val rank: Long = matchingLines.rankLong(s)
       if (rank < matchingLines.getLongCardinality) {
         matchingLines.select(rank)
       } else {
@@ -83,7 +86,7 @@ case class SearchResult(
    * @return primitive 0-based line index, or -1L if no match exists
    */
   def findPreviousLine(startLine: Long): Long = {
-    if (matchingLines.isEmpty || startLine < matchingLines.first) {
+    if (matchingLines.isEmpty || startLine < 0L || startLine < matchingLines.first) {
       -1L
     } else if (matchingLines.contains(startLine)) {
       startLine

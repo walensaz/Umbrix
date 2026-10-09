@@ -21,7 +21,8 @@ class WorkspaceTab(
     initialSearchQuery: String = "",
     initialSearchResult: SearchResult? = null,
     initialIsFilteredView: Boolean = false,
-    initialSelectedLineIndex: Long? = null
+    initialSelectedLineIndex: Long? = null,
+    val id: String = java.util.UUID.randomUUID().toString()
 ) {
     val isScratchpad: Boolean get() = scratchpadSession != null
     val title: String get() = scratchpadSession?.title ?: session?.fileName() ?: java.io.File(filePath).name
@@ -30,6 +31,7 @@ class WorkspaceTab(
     var searchQuery: String by mutableStateOf(initialSearchQuery)
     var activeSearchQuery: String by mutableStateOf("")
     var searchResult: SearchResult? by mutableStateOf(initialSearchResult)
+    var rawSearchResult: SearchResult? by mutableStateOf(null)
     var isSearching: Boolean by mutableStateOf(false)
     var isFilteredView: Boolean by mutableStateOf(initialIsFilteredView)
     var isBookmarkFilterActive: Boolean by mutableStateOf(false)

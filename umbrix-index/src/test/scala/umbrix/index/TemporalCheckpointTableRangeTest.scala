@@ -50,10 +50,10 @@ class TemporalCheckpointTableRangeTest extends FunSuite {
     assertEquals(startExact, LineIndex(0L))
     assertEquals(endExact, LineIndex(16384L))
 
-    // Intermediate range queries
+    // Intermediate range queries (upper bound encloses through next checkpoint)
     val (startMid, endMid) = table.seekLineRange(EpochMicros(1500000L), EpochMicros(3500000L))
     assertEquals(startMid, LineIndex(0L))
-    assertEquals(endMid, LineIndex(16384L))
+    assertEquals(endMid, LineIndex(24576L))
 
     // Inverted bounds auto-normalize
     val (startInverted, endInverted) = table.seekLineRange(EpochMicros(3000000L), EpochMicros(1000000L))
