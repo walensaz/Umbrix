@@ -55,6 +55,10 @@ fun DockPaneView(
     onOpenScratchpadManager: (() -> Unit)? = null,
     onOpenFile: (() -> Unit)? = null,
     onNewScratchpad: (() -> Unit)? = null,
+    onOpenTimeline: (() -> Unit)? = null,
+    timelineManager: umbrix.ui.timeline.InvestigationTimelineManager? = null,
+    onJumpToTimelineEvent: ((umbrix.ui.timeline.TimelineEvent) -> Unit)? = null,
+    onOpenTimelineExportDialog: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     // Callback delegates for LogViewportCanvas
     onFilterByText: (String) -> Unit = {},
@@ -125,7 +129,8 @@ fun DockPaneView(
             onCloseAllTabs = onCloseAllTabs,
             onOpenScratchpadManager = onOpenScratchpadManager,
             onOpenFile = onOpenFile,
-            onNewScratchpad = onNewScratchpad
+            onNewScratchpad = onNewScratchpad,
+            onOpenTimeline = onOpenTimeline
         )
 
         Divider(Orientation.Horizontal)
@@ -144,11 +149,19 @@ fun DockPaneView(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "Drag a tab here or open a file/scratchpad",
+                            text = "Drag a tab here or open a file/scratchpad/timeline",
                             fontSize = 12.sp,
                             color = UmbrixTheme.colors.textSubtle
                         )
                     }
+                }
+                activeTab.isTimelineTab && timelineManager != null -> {
+                    umbrix.ui.timeline.InvestigationTimelineCanvas(
+                        timelineManager = timelineManager,
+                        onJumpToEvent = { onJumpToTimelineEvent?.invoke(it) },
+                        onOpenExportDialog = { onOpenTimelineExportDialog?.invoke() },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
                 activeTab.isScratchpad -> {
                     ScratchpadEditorCanvas(

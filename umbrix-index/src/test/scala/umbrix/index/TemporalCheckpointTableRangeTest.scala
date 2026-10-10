@@ -159,6 +159,35 @@ class TemporalCheckpointTableRangeTest extends FunSuite {
       val epochMillisParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(epochMillisLine))
       assert(epochMillisParsed.isDefined)
       assertEquals(epochMillisParsed.get, 1609459200000L * 1000L)
+
+      // Time-of-day with millis (single-day logs)
+      val timeOfDayLine = "14:23:01.123 [INFO] Worker pool initialized"
+      val timeParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(timeOfDayLine))
+      assert(timeParsed.isDefined)
+      val refDt = java.time.LocalDateTime.of(2026, 1, 1, 14, 23, 1).toEpochSecond(java.time.ZoneOffset.UTC) * 1000000L + 123000L
+      assertEquals(timeParsed.get, refDt)
+
+      // Bracketed Time-of-day
+      val bracketedTime = "[09:15:30] Service started"
+      val bracketedParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(bracketedTime))
+      assert(bracketedParsed.isDefined)
+
+      // Month-day with time (Logcat / Tomcat)
+      val logcatLine = "10-09 14:23:01.456 1234 5678 D MyApp: Debug message"
+      val logcatParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(logcatLine))
+      assert(logcatParsed.isDefined)
+
+      // 2-digit year (yy-MM-dd)
+      val twoDigitYearLine = "24-10-09 14:23:01 [main] server started"
+      val twoDigitParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(twoDigitYearLine))
+      assert(twoDigitParsed.isDefined)
+      val expected24 = java.time.LocalDateTime.of(2024, 10, 9, 14, 23, 1).toEpochSecond(java.time.ZoneOffset.UTC) * 1000000L
+      assertEquals(twoDigitParsed.get, expected24)
+
+      // US Date (MM/dd/yyyy)
+      val usDateLine = "10/09/2026 14:23:01.500 Transaction processed"
+      val usParsed = TemporalCheckpointTable.tryParseTimestamp(arena.allocateFrom(usDateLine))
+      assert(usParsed.isDefined)
     } finally {
       arena.close()
     }

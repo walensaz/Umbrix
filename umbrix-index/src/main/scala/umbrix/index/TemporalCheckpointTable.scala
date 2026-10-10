@@ -508,24 +508,303 @@ object TemporalCheckpointTable {
   }
 
   private def tryParseAtOffset(segment: MemorySegment, offset: Long, available: Long): Option[Long] = {
-    if (available < 4L) {
+    val effOffset = if (available > 0L && (segment.get(ValueLayout.JAVA_BYTE, offset) == '['.toByte || segment.get(ValueLayout.JAVA_BYTE, offset) == '('.toByte)) {
+      offset + 1L
+    } else {
+      offset
+    }
+    val effAvail = available - (effOffset - offset)
+
+    if (effAvail < 4L) {
       None
     } else {
-      val b0 = segment.get(ValueLayout.JAVA_BYTE, offset)
+      val b0 = segment.get(ValueLayout.JAVA_BYTE, effOffset)
       if (isDigit(b0)) {
-        val isoResult = tryParseIsoOrDotted(segment, offset, available)
+        val isoResult = tryParseIsoOrDotted(segment, effOffset, effAvail)
         if (isoResult.isDefined) {
           isoResult
         } else {
-          val epochResult = tryParseEpoch(segment, offset, available)
-          if (epochResult.isDefined) {
-            epochResult
+          val twoDigitResult = tryParseTwoDigitYear(segment, effOffset, effAvail)
+          if (twoDigitResult.isDefined) {
+            twoDigitResult
           } else {
-            tryParseApacheClf(segment, offset, available)
+            val usEurResult = tryParseUsOrEurDate(segment, effOffset, effAvail)
+            if (usEurResult.isDefined) {
+              usEurResult
+            } else {
+              val monthDayResult = tryParseMonthDayTime(segment, effOffset, effAvail)
+              if (monthDayResult.isDefined) {
+                monthDayResult
+              } else {
+                val timeOfDayResult = tryParseTimeOfDay(segment, effOffset, effAvail)
+                if (timeOfDayResult.isDefined) {
+                  timeOfDayResult
+                } else {
+                  val clfResult = tryParseApacheClf(segment, effOffset, effAvail)
+                  if (clfResult.isDefined) {
+                    clfResult
+                  } else if (isLeadingOrTimestampKey(segment, offset)) {
+                    tryParseEpoch(segment, effOffset, effAvail)
+                  } else {
+                    None
+                  }
+                }
+              }
+            }
           }
         }
       } else if (isAlpha(b0)) {
-        tryParseSyslog(segment, offset, available)
+        tryParseSyslog(segment, effOffset, effAvail)
+      } else {
+        None
+      }
+    }
+  }
+
+  private def isLeadingOrTimestampKey(segment: MemorySegment, tokenOffset: Long): Boolean = {
+    if (tokenOffset <= 0L) {
+      true
+    } else {
+      var allLeadingPunctuation = true
+      var i = 0L
+      while (i < tokenOffset && allLeadingPunctuation) {
+        val b = segment.get(ValueLayout.JAVA_BYTE, i)
+        if (b != ' '.toByte && b != '\t'.toByte && b != '-'.toByte &&
+            b != '['.toByte && b != ']'.toByte && b != '('.toByte &&
+            b != ')'.toByte && b != '<'.toByte && b != '>'.toByte &&
+            b != ':'.toByte && b != '@'.toByte) {
+          allLeadingPunctuation = false
+        }
+        i += 1L
+      }
+
+      if (allLeadingPunctuation) {
+        true
+      } else {
+        val checkLen = math.min(tokenOffset, 16L)
+        val startIdx = tokenOffset - checkLen
+        var isKey = false
+        var k = startIdx
+        while (k < tokenOffset && !isKey) {
+          val b = segment.get(ValueLayout.JAVA_BYTE, k)
+          if (b == '@'.toByte || b == 't'.toByte || b == 'T'.toByte) {
+            isKey = true
+          }
+          k += 1L
+        }
+        isKey
+      }
+    }
+  }
+
+  /**
+   * Parses time-of-day timestamps: `HH:mm:ss[.SSS|,SSS]` (e.g. `14:23:01.123` or `14:23:01,123` or `14:23:01`).
+   * Anchors to reference date 2026-01-01 (UTC) for single-day duration resolution.
+   */
+  private def tryParseTimeOfDay(segment: MemorySegment, offset: Long, available: Long): Option[Long] = {
+    if (available < 8L) {
+      None
+    } else {
+      val h0 = segment.get(ValueLayout.JAVA_BYTE, offset + 0L)
+      val h1 = segment.get(ValueLayout.JAVA_BYTE, offset + 1L)
+      val sep1 = segment.get(ValueLayout.JAVA_BYTE, offset + 2L)
+      val m0 = segment.get(ValueLayout.JAVA_BYTE, offset + 3L)
+      val m1 = segment.get(ValueLayout.JAVA_BYTE, offset + 4L)
+      val sep2 = segment.get(ValueLayout.JAVA_BYTE, offset + 5L)
+      val s0 = segment.get(ValueLayout.JAVA_BYTE, offset + 6L)
+      val s1 = segment.get(ValueLayout.JAVA_BYTE, offset + 7L)
+
+      if (isDigit(h0) && isDigit(h1) && sep1 == ':'.toByte &&
+          isDigit(m0) && isDigit(m1) && sep2 == ':'.toByte &&
+          isDigit(s0) && isDigit(s1)) {
+        val hour = parseDigits2(h0, h1)
+        val minute = parseDigits2(m0, m1)
+        val second = parseDigits2(s0, s1)
+        if (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && second >= 0 && second <= 59) {
+          var microsecondFraction: Long = 0L
+          if (available >= 12L) {
+            val fracSep = segment.get(ValueLayout.JAVA_BYTE, offset + 8L)
+            if (fracSep == '.'.toByte || fracSep == ','.toByte) {
+              val f0 = segment.get(ValueLayout.JAVA_BYTE, offset + 9L)
+              val f1 = segment.get(ValueLayout.JAVA_BYTE, offset + 10L)
+              val f2 = segment.get(ValueLayout.JAVA_BYTE, offset + 11L)
+              if (isDigit(f0) && isDigit(f1) && isDigit(f2)) {
+                val millis = parseDigits3(f0, f1, f2)
+                if (available >= 15L) {
+                  val f3 = segment.get(ValueLayout.JAVA_BYTE, offset + 12L)
+                  val f4 = segment.get(ValueLayout.JAVA_BYTE, offset + 13L)
+                  val f5 = segment.get(ValueLayout.JAVA_BYTE, offset + 14L)
+                  if (isDigit(f3) && isDigit(f4) && isDigit(f5)) {
+                    microsecondFraction = millis.toLong * 1000L + parseDigits3(f3, f4, f5).toLong
+                  } else {
+                    microsecondFraction = millis.toLong * 1000L
+                  }
+                } else {
+                  microsecondFraction = millis.toLong * 1000L
+                }
+              }
+            }
+          }
+          val dateTime = LocalDateTime.of(2026, 1, 1, hour, minute, second)
+          val epochSeconds = dateTime.toEpochSecond(ZoneOffset.UTC)
+          Some(epochSeconds * 1000000L + microsecondFraction)
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+  }
+
+  /**
+   * Parses month-day timestamps: `MM-dd HH:mm:ss[.SSS]` or `MM/dd HH:mm:ss` (e.g. Logcat, Tomcat).
+   */
+  private def tryParseMonthDayTime(segment: MemorySegment, offset: Long, available: Long): Option[Long] = {
+    if (available < 14L) {
+      None
+    } else {
+      val m0 = segment.get(ValueLayout.JAVA_BYTE, offset + 0L)
+      val m1 = segment.get(ValueLayout.JAVA_BYTE, offset + 1L)
+      val sep1 = segment.get(ValueLayout.JAVA_BYTE, offset + 2L)
+      val d0 = segment.get(ValueLayout.JAVA_BYTE, offset + 3L)
+      val d1 = segment.get(ValueLayout.JAVA_BYTE, offset + 4L)
+      val sepDateTime = segment.get(ValueLayout.JAVA_BYTE, offset + 5L)
+      val isDateSep = sep1 == '-'.toByte || sep1 == '/'.toByte || sep1 == '.'.toByte
+      val isDateTimeSep = sepDateTime == ' '.toByte || sepDateTime == 'T'.toByte
+
+      if (isDigit(m0) && isDigit(m1) && isDateSep && isDigit(d0) && isDigit(d1) && isDateTimeSep) {
+        val month = parseDigits2(m0, m1)
+        val day = parseDigits2(d0, d1)
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          tryParseTimeOfDay(segment, offset + 6L, available - 6L) match {
+            case Some(timeMicros) =>
+              val timeOfDaySeconds = (timeMicros / 1000000L) % 86400L
+              val frac = timeMicros % 1000000L
+              val year = extractNearbyYear(segment, 2026)
+              try {
+                val date = java.time.LocalDate.of(year, month, day)
+                val epochSec = date.atStartOfDay(ZoneOffset.UTC).toEpochSecond + timeOfDaySeconds
+                Some(epochSec * 1000000L + frac)
+              } catch {
+                case NonFatal(_) => None
+              }
+            case None => None
+          }
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+  }
+
+  /**
+   * Parses two-digit year timestamps: `yy-MM-dd HH:mm:ss` or `yy/MM/dd HH:mm:ss` (e.g. `24-10-09 14:23:01`).
+   */
+  private def tryParseTwoDigitYear(segment: MemorySegment, offset: Long, available: Long): Option[Long] = {
+    if (available < 17L) {
+      None
+    } else {
+      val y0 = segment.get(ValueLayout.JAVA_BYTE, offset + 0L)
+      val y1 = segment.get(ValueLayout.JAVA_BYTE, offset + 1L)
+      val sep1 = segment.get(ValueLayout.JAVA_BYTE, offset + 2L)
+      val m0 = segment.get(ValueLayout.JAVA_BYTE, offset + 3L)
+      val m1 = segment.get(ValueLayout.JAVA_BYTE, offset + 4L)
+      val sep2 = segment.get(ValueLayout.JAVA_BYTE, offset + 5L)
+      val d0 = segment.get(ValueLayout.JAVA_BYTE, offset + 6L)
+      val d1 = segment.get(ValueLayout.JAVA_BYTE, offset + 7L)
+      val sepDateTime = segment.get(ValueLayout.JAVA_BYTE, offset + 8L)
+
+      val isDateSep1 = sep1 == '-'.toByte || sep1 == '/'.toByte || sep1 == '.'.toByte
+      val isDateSep2 = sep2 == '-'.toByte || sep2 == '/'.toByte || sep2 == '.'.toByte
+      val isDateTimeSep = sepDateTime == ' '.toByte || sepDateTime == 'T'.toByte || sepDateTime == '_'.toByte
+
+      if (isDigit(y0) && isDigit(y1) && isDateSep1 && isDigit(m0) && isDigit(m1) && isDateSep2 && isDigit(d0) && isDigit(d1) && isDateTimeSep) {
+        val yy = parseDigits2(y0, y1)
+        val month = parseDigits2(m0, m1)
+        val day = parseDigits2(d0, d1)
+        val year = if (yy >= 70) 1900 + yy else 2000 + yy
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          tryParseTimeOfDay(segment, offset + 9L, available - 9L) match {
+            case Some(timeMicros) =>
+              val timeOfDaySeconds = (timeMicros / 1000000L) % 86400L
+              val frac = timeMicros % 1000000L
+              try {
+                val date = java.time.LocalDate.of(year, month, day)
+                val epochSec = date.atStartOfDay(ZoneOffset.UTC).toEpochSecond + timeOfDaySeconds
+                Some(epochSec * 1000000L + frac)
+              } catch {
+                case NonFatal(_) => None
+              }
+            case None => None
+          }
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+  }
+
+  /**
+   * Parses US/European dates: `MM/dd/yyyy HH:mm:ss` or `dd/MM/yyyy HH:mm:ss` or `dd-MM-yyyy HH:mm:ss`.
+   */
+  private def tryParseUsOrEurDate(segment: MemorySegment, offset: Long, available: Long): Option[Long] = {
+    if (available < 19L) {
+      None
+    } else {
+      val a0 = segment.get(ValueLayout.JAVA_BYTE, offset + 0L)
+      val a1 = segment.get(ValueLayout.JAVA_BYTE, offset + 1L)
+      val sep1 = segment.get(ValueLayout.JAVA_BYTE, offset + 2L)
+      val b0 = segment.get(ValueLayout.JAVA_BYTE, offset + 3L)
+      val b1 = segment.get(ValueLayout.JAVA_BYTE, offset + 4L)
+      val sep2 = segment.get(ValueLayout.JAVA_BYTE, offset + 5L)
+      val y0 = segment.get(ValueLayout.JAVA_BYTE, offset + 6L)
+      val y1 = segment.get(ValueLayout.JAVA_BYTE, offset + 7L)
+      val y2 = segment.get(ValueLayout.JAVA_BYTE, offset + 8L)
+      val y3 = segment.get(ValueLayout.JAVA_BYTE, offset + 9L)
+      val sepDateTime = segment.get(ValueLayout.JAVA_BYTE, offset + 10L)
+
+      val isDateSep1 = sep1 == '/'.toByte || sep1 == '-'.toByte || sep1 == '.'.toByte
+      val isDateSep2 = sep2 == '/'.toByte || sep2 == '-'.toByte || sep2 == '.'.toByte
+      val isDateTimeSep = sepDateTime == ' '.toByte || sepDateTime == 'T'.toByte
+
+      if (isDigit(a0) && isDigit(a1) && isDateSep1 && isDigit(b0) && isDigit(b1) && isDateSep2 &&
+          isDigit(y0) && isDigit(y1) && isDigit(y2) && isDigit(y3) && isDateTimeSep) {
+        val valA = parseDigits2(a0, a1)
+        val valB = parseDigits2(b0, b1)
+        val year = parseDigits4(y0, y1, y2, y3)
+        if (year >= 1970 && year <= 2100) {
+          val (month, day) = if (valA >= 1 && valA <= 12 && valB >= 1 && valB <= 31) {
+            (valA, valB) // MM/dd/yyyy
+          } else if (valB >= 1 && valB <= 12 && valA >= 1 && valA <= 31) {
+            (valB, valA) // dd/MM/yyyy
+          } else {
+            (-1, -1)
+          }
+          if (month > 0 && day > 0) {
+            tryParseTimeOfDay(segment, offset + 11L, available - 11L) match {
+              case Some(timeMicros) =>
+                val timeOfDaySeconds = (timeMicros / 1000000L) % 86400L
+                val frac = timeMicros % 1000000L
+                try {
+                  val date = java.time.LocalDate.of(year, month, day)
+                  val epochSec = date.atStartOfDay(ZoneOffset.UTC).toEpochSecond + timeOfDaySeconds
+                  Some(epochSec * 1000000L + frac)
+                } catch {
+                  case NonFatal(_) => None
+                }
+              case None => None
+            }
+          } else {
+            None
+          }
+        } else {
+          None
+        }
       } else {
         None
       }

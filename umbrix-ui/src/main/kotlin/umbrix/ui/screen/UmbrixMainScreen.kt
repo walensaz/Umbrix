@@ -384,6 +384,29 @@ fun UmbrixMainScreen(
         }
     }
 
+    fun openOrCreateTimelineTab() {
+        val existingTabIndex = openTabs.indexOfFirst { it.isTimelineTab }
+        if (existingTabIndex >= 0) {
+            activeTabIndex = existingTabIndex
+            val existingTab = openTabs[existingTabIndex]
+            val leaf = DockTreeManager.findLeafForTab(dockTree, existingTab.id)
+            if (leaf != null) {
+                leaf.activeTabId = existingTab.id
+                activeLeafId = leaf.id
+            }
+            ToastManager.info("Switched to Incident Timeline")
+        } else {
+            val newTab = WorkspaceTab(
+                session = null,
+                filePath = "timeline://incident"
+            )
+            openTabs.add(newTab)
+            activeTabIndex = openTabs.size - 1
+            dockTree = DockTreeManager.addTabToLeaf(dockTree, activeLeafId, newTab.id)
+            ToastManager.info("Opened Incident Timeline")
+        }
+    }
+
     fun triggerSearch(queryText: String, immediate: Boolean = false) {
         val tab = currentTab ?: return
         val session = tab.session ?: return
@@ -538,7 +561,7 @@ fun UmbrixMainScreen(
                     }
                 }
                 is MenuAction.ToggleTimelineDrawer -> {
-                    isTimelineDrawerOpen = !isTimelineDrawerOpen
+                    openOrCreateTimelineTab()
                 }
                 is MenuAction.ManageBookmarks -> {
                     if (tab != null) {
@@ -1015,7 +1038,7 @@ fun UmbrixMainScreen(
                         triggerSearch(newQuery)
                     },
                     searchResult = currentTab?.searchResult,
-                    errorMessage = searchErrorMessage,
+                    errorMessage = searchErrorMessage ?: currentTab?.searchWrapIndicator,
                     focusRequester = searchFocusRequester,
                     focusTrigger = searchFocusTrigger,
                     isSearching = currentTab?.isSearching ?: false,
@@ -1244,6 +1267,25 @@ fun UmbrixMainScreen(
                             onOpenScratchpadManager = { isScratchpadManagerDialogOpen = true },
                             onOpenFile = { openFileViaNativeDialog() },
                             onNewScratchpad = { handleMenuAction(MenuAction.NewScratchpad) },
+                            onOpenTimeline = { openOrCreateTimelineTab() },
+                            timelineManager = timelineManager,
+                            onJumpToTimelineEvent = { event ->
+                                val targetTabIdx = openTabs.indexOfFirst { it.filePath == event.sourceDocumentPath }
+                                if (targetTabIdx >= 0) {
+                                    activeTabIndex = targetTabIdx
+                                    val targetTab = openTabs[targetTabIdx]
+                                    val leaf = DockTreeManager.findLeafForTab(dockTree, targetTab.id)
+                                    if (leaf != null) {
+                                        activeLeafId = leaf.id
+                                        leaf.activeTabId = targetTab.id
+                                    }
+                                    targetTab.selectedLineIndex = event.lineIndex
+                                    targetTab.topVisibleLine = (event.lineIndex - 10).coerceAtLeast(0L)
+                                } else {
+                                    loadLogFile(event.sourceDocumentPath, asNewTab = true)
+                                }
+                            },
+                            onOpenTimelineExportDialog = { isTimelineExportDialogOpen = true },
                             modifier = Modifier.fillMaxSize(),
                             onFilterByText = { text ->
                                 currentTab?.isFilteredView = true
@@ -1283,7 +1325,6 @@ fun UmbrixMainScreen(
                                     lineContent = text
                                 )
                                 ToastManager.success("Pinned Line ${line + 1} to Incident Timeline")
-                                isTimelineDrawerOpen = true
                             },
                             onAppendToScratchpad = { line, text ->
                                 val tab = currentTab ?: return@DockLayoutHost
@@ -1331,26 +1372,6 @@ fun UmbrixMainScreen(
                         currentTab?.topVisibleLine = (line - 10).coerceAtLeast(0L)
                         ToastManager.info("Jumped to Line #$line")
                     }
-                )
-            }
-
-            // --- Incident Timeline Drawer (Ctrl+Shift+T) ---
-            if (isTimelineDrawerOpen) {
-                Divider(Orientation.Horizontal)
-                InvestigationTimelineDrawer(
-                    timelineManager = timelineManager,
-                    onJumpToEvent = { event ->
-                        val targetTabIdx = openTabs.indexOfFirst { it.filePath == event.sourceDocumentPath }
-                        if (targetTabIdx >= 0) {
-                            activeTabIndex = targetTabIdx
-                            openTabs[targetTabIdx].selectedLineIndex = event.lineIndex
-                            openTabs[targetTabIdx].topVisibleLine = (event.lineIndex - 10).coerceAtLeast(0L)
-                        } else {
-                            loadLogFile(event.sourceDocumentPath, asNewTab = true)
-                        }
-                    },
-                    onOpenExportDialog = { isTimelineExportDialogOpen = true },
-                    onCloseDrawer = { isTimelineDrawerOpen = false }
                 )
             }
 

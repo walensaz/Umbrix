@@ -25,7 +25,7 @@ import java.util.function.LongConsumer
 object VectorScanner extends ByteScanner {
 
   /** Preferred SIMD species on current host CPU (e.g. 512, 256, or 128-bit). */
-  val preferredSpecies: VectorSpecies[java.lang.Byte] = ByteVector.SPECIES_PREFERRED
+  private val preferredSpecies: VectorSpecies[java.lang.Byte] = ByteVector.SPECIES_PREFERRED
 
   /** Hardware SIMD register byte width (64 for AVX-512, 32 for AVX2, 16 for NEON). */
   val vectorByteWidth: Int = preferredSpecies.vectorBitSize() / 8

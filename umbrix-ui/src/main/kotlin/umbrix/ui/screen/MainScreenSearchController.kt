@@ -96,13 +96,20 @@ object MainScreenSearchController {
 
                                     if (!hasJumpedToFirstMatch && !partialResult.isEmpty()) {
                                         val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
-                                        val firstLine = partialResult.findNextLine(minLine)
-                                        if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
+                                        val maxLine = if (tab.isTemporalFocusActive) tab.temporalFocusEndLine else ((session.totalLines() as Number).toLong() - 1L)
+                                        val anchorLine = tab.selectedLineIndex ?: if (tab.isTemporalFocusActive) (tab.temporalFocusStartLine + tab.topVisibleLine) else tab.topVisibleLine
+                                        val clampedAnchor = anchorLine.coerceIn(minLine, maxLine)
+                                        val candidateLine = partialResult.findNextLine(clampedAnchor)
+
+                                        if (candidateLine >= 0L && candidateLine <= maxLine) {
                                             hasJumpedToFirstMatch = true
+                                            tab.searchWrapPromptPending = false
+                                            tab.searchWrapIndicator = null
                                             val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                             if (tab.isFilteredView) {
                                                 val filteredView = session.createFilteredView(partialResult.matchingLines())
-                                                val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                                val vIdx = (filteredView.virtualIndexForPhysicalLine(candidateLine) as Number).toLong()
+                                                val lineText = try { filteredView.getVirtualLineText(vIdx, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                                 val intervals = findNeedleIntervals(
                                                     lineText,
                                                     needles,
@@ -110,12 +117,12 @@ object MainScreenSearchController {
                                                     isWholeWord = tab.isSearchWholeWord,
                                                     isRegex = tab.isSearchRegex
                                                 )
-                                                tab.topVisibleLine = 0L
-                                                tab.selectedLineIndex = firstLine
+                                                tab.topVisibleLine = vIdx
+                                                tab.selectedLineIndex = candidateLine
                                                 tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                                 tab.searchNavigationGeneration++
                                             } else {
-                                                val lineText = try { session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                                val lineText = try { session.getLineText(candidateLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                                 val intervals = findNeedleIntervals(
                                                     lineText,
                                                     needles,
@@ -125,18 +132,23 @@ object MainScreenSearchController {
                                                 )
                                                 val halfVisible = (tab.visibleRowCount / 2).toLong()
                                                 if (tab.isTemporalFocusActive) {
-                                                    val relativeLine = firstLine - tab.temporalFocusStartLine
+                                                    val relativeLine = candidateLine - tab.temporalFocusStartLine
                                                     val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
                                                     val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
                                                     tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                                                 } else {
                                                     val maxTop = maxOf(0L, (session.totalLines() as Number).toLong() - tab.visibleRowCount)
-                                                    tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                                    tab.topVisibleLine = (candidateLine - halfVisible).coerceIn(0L, maxTop)
                                                 }
-                                                tab.selectedLineIndex = firstLine
+                                                tab.selectedLineIndex = candidateLine
                                                 tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                                 tab.searchNavigationGeneration++
                                             }
+                                        } else {
+                                            // Matches exist in the document, but none below current position
+                                            tab.searchWrapPromptPending = true
+                                            tab.searchWrapIndicator = "No matches below cursor. Press Enter to wrap."
+                                            onSearchErrorMessageChange("No matches below cursor. Press Enter to wrap.")
                                         }
                                     }
                                 }
@@ -158,26 +170,39 @@ object MainScreenSearchController {
                                 tab.rawSearchResult = null
                                 tab.activeSearchQuery = ""
                                 tab.selectedMatchColumn = -1
+                                tab.searchWrapPromptPending = false
+                                tab.searchWrapIndicator = null
                             },
                             { rawSearchResult: SearchResult ->
-                                onSearchErrorMessageChange(null)
-                                tab.rawSearchResult = rawSearchResult
                                 val searchResult = if (tab.isTemporalFocusActive) {
                                     rawSearchResult.constrainToRange(tab.temporalFocusStartLine, tab.temporalFocusEndLine)
                                 } else {
                                     rawSearchResult
                                 }
+                                tab.rawSearchResult = rawSearchResult
                                 tab.searchResult = searchResult
                                 tab.activeSearchQuery = queryText
 
-                                if (!hasJumpedToFirstMatch && !searchResult.isEmpty()) {
+                                if (searchResult.isEmpty()) {
+                                    onSearchErrorMessageChange(null)
+                                    tab.searchWrapPromptPending = false
+                                    tab.searchWrapIndicator = null
+                                } else if (!hasJumpedToFirstMatch) {
                                     val minLine = if (tab.isTemporalFocusActive) tab.temporalFocusStartLine else 0L
-                                    val firstLine = searchResult.findNextLine(minLine)
-                                    if (firstLine >= 0L && (!tab.isTemporalFocusActive || firstLine <= tab.temporalFocusEndLine)) {
+                                    val maxLine = if (tab.isTemporalFocusActive) tab.temporalFocusEndLine else ((session.totalLines() as Number).toLong() - 1L)
+                                    val anchorLine = tab.selectedLineIndex ?: if (tab.isTemporalFocusActive) (tab.temporalFocusStartLine + tab.topVisibleLine) else tab.topVisibleLine
+                                    val clampedAnchor = anchorLine.coerceIn(minLine, maxLine)
+                                    val candidateLine = searchResult.findNextLine(clampedAnchor)
+
+                                    if (candidateLine >= 0L && candidateLine <= maxLine) {
+                                        onSearchErrorMessageChange(null)
+                                        tab.searchWrapPromptPending = false
+                                        tab.searchWrapIndicator = null
                                         val needles = extractSearchNeedles(queryText, isRegex = tab.isSearchRegex)
                                         if (tab.isFilteredView) {
                                             val filteredView = session.createFilteredView(searchResult.matchingLines())
-                                            val lineText = try { filteredView.getVirtualLineText(0L, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                            val vIdx = (filteredView.virtualIndexForPhysicalLine(candidateLine) as Number).toLong()
+                                            val lineText = try { filteredView.getVirtualLineText(vIdx, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                             val intervals = findNeedleIntervals(
                                                 lineText,
                                                 needles,
@@ -185,12 +210,12 @@ object MainScreenSearchController {
                                                 isWholeWord = tab.isSearchWholeWord,
                                                 isRegex = tab.isSearchRegex
                                             )
-                                            tab.topVisibleLine = 0L
-                                            tab.selectedLineIndex = firstLine
+                                            tab.topVisibleLine = vIdx
+                                            tab.selectedLineIndex = candidateLine
                                             tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                             tab.searchNavigationGeneration++
                                         } else {
-                                            val lineText = try { session.getLineText(firstLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
+                                            val lineText = try { session.getLineText(candidateLine, ViewportState.MAX_SHAPED_CHARS) } catch (_: Exception) { "" }
                                             val intervals = findNeedleIntervals(
                                                 lineText,
                                                 needles,
@@ -200,18 +225,22 @@ object MainScreenSearchController {
                                             )
                                             val halfVisible = (tab.visibleRowCount / 2).toLong()
                                             if (tab.isTemporalFocusActive) {
-                                                val relativeLine = firstLine - tab.temporalFocusStartLine
+                                                val relativeLine = candidateLine - tab.temporalFocusStartLine
                                                 val totalTemporal = maxOf(0L, tab.temporalFocusEndLine - tab.temporalFocusStartLine + 1L)
                                                 val maxTop = maxOf(0L, totalTemporal - tab.visibleRowCount)
                                                 tab.topVisibleLine = (relativeLine - halfVisible).coerceIn(0L, maxTop)
                                             } else {
                                                 val maxTop = maxOf(0L, (session.totalLines() as Number).toLong() - tab.visibleRowCount)
-                                                tab.topVisibleLine = (firstLine - halfVisible).coerceIn(0L, maxTop)
+                                                tab.topVisibleLine = (candidateLine - halfVisible).coerceIn(0L, maxTop)
                                             }
-                                            tab.selectedLineIndex = firstLine
+                                            tab.selectedLineIndex = candidateLine
                                             tab.selectedMatchColumn = intervals.firstOrNull()?.first ?: 0
                                             tab.searchNavigationGeneration++
                                         }
+                                    } else {
+                                        tab.searchWrapPromptPending = true
+                                        tab.searchWrapIndicator = "No matches below cursor. Press Enter to wrap."
+                                        onSearchErrorMessageChange("No matches below cursor. Press Enter to wrap.")
                                     }
                                 }
                             }
@@ -283,21 +312,39 @@ object MainScreenSearchController {
                     tab.selectedMatchColumn = nextInterval.first
                     tab.selectedLineIndex = (filteredView.physicalLineForVirtualIndex(currentVirtual) as Number).toLong()
                     tab.searchNavigationGeneration++
-                } else {
-                    var targetVirtual = if (currentVirtual + 1L < totalFiltered) currentVirtual + 1L else 0L
-                    var targetIntervals = getFilteredLineIntervals(targetVirtual)
-                    var attempts = 0
-                    while (targetIntervals.isEmpty() && attempts < totalFiltered) {
-                        targetVirtual = if (targetVirtual + 1L < totalFiltered) targetVirtual + 1L else 0L
-                        targetIntervals = getFilteredLineIntervals(targetVirtual)
-                        attempts++
-                    }
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
+                } else if (currentVirtual + 1L < totalFiltered) {
+                    val targetVirtual = currentVirtual + 1L
+                    val targetIntervals = getFilteredLineIntervals(targetVirtual)
                     val targetPhysical = (filteredView.physicalLineForVirtualIndex(targetVirtual) as Number).toLong()
                     tab.topVisibleLine = targetVirtual
                     tab.selectedLineIndex = targetPhysical
                     tab.selectedMatchColumn = targetIntervals.firstOrNull()?.first ?: 0
                     tab.subLineScrollOffsetPx = 0f
                     tab.searchNavigationGeneration++
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
+                } else {
+                    // At end of filtered results
+                    if (!tab.searchWrapPromptPending) {
+                        tab.searchWrapPromptPending = true
+                        tab.searchWrapIndicator = "Reached end. Press Enter to wrap to top."
+                        umbrix.ui.toast.ToastManager.info("Reached end of filtered view. Press Enter to wrap to top.")
+                    } else {
+                        // User confirmed wrap
+                        val targetVirtual = 0L
+                        val targetIntervals = getFilteredLineIntervals(targetVirtual)
+                        val targetPhysical = (filteredView.physicalLineForVirtualIndex(targetVirtual) as Number).toLong()
+                        tab.topVisibleLine = targetVirtual
+                        tab.selectedLineIndex = targetPhysical
+                        tab.selectedMatchColumn = targetIntervals.firstOrNull()?.first ?: 0
+                        tab.subLineScrollOffsetPx = 0f
+                        tab.searchNavigationGeneration++
+                        tab.searchWrapPromptPending = false
+                        tab.searchWrapIndicator = "Wrapped to top of filtered view"
+                        umbrix.ui.toast.ToastManager.info("Wrapped to top of filtered view (Match 1 of $totalFiltered)")
+                    }
                 }
             } else {
                 val prevInterval = if (currentCol >= 0) {
@@ -310,21 +357,39 @@ object MainScreenSearchController {
                     tab.selectedMatchColumn = prevInterval.first
                     tab.selectedLineIndex = (filteredView.physicalLineForVirtualIndex(currentVirtual) as Number).toLong()
                     tab.searchNavigationGeneration++
-                } else {
-                    var targetVirtual = if (currentVirtual - 1L >= 0L) currentVirtual - 1L else totalFiltered - 1L
-                    var targetIntervals = getFilteredLineIntervals(targetVirtual)
-                    var attempts = 0
-                    while (targetIntervals.isEmpty() && attempts < totalFiltered) {
-                        targetVirtual = if (targetVirtual - 1L >= 0L) targetVirtual - 1L else totalFiltered - 1L
-                        targetIntervals = getFilteredLineIntervals(targetVirtual)
-                        attempts++
-                    }
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
+                } else if (currentVirtual - 1L >= 0L) {
+                    val targetVirtual = currentVirtual - 1L
+                    val targetIntervals = getFilteredLineIntervals(targetVirtual)
                     val targetPhysical = (filteredView.physicalLineForVirtualIndex(targetVirtual) as Number).toLong()
                     tab.topVisibleLine = targetVirtual
                     tab.selectedLineIndex = targetPhysical
                     tab.selectedMatchColumn = targetIntervals.lastOrNull()?.first ?: 0
                     tab.subLineScrollOffsetPx = 0f
                     tab.searchNavigationGeneration++
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
+                } else {
+                    // At start of filtered results
+                    if (!tab.searchWrapPromptPending) {
+                        tab.searchWrapPromptPending = true
+                        tab.searchWrapIndicator = "Reached start. Press Shift+Enter to wrap to bottom."
+                        umbrix.ui.toast.ToastManager.info("Reached start of filtered view. Press Shift+Enter to wrap to bottom.")
+                    } else {
+                        // User confirmed wrap
+                        val targetVirtual = totalFiltered - 1L
+                        val targetIntervals = getFilteredLineIntervals(targetVirtual)
+                        val targetPhysical = (filteredView.physicalLineForVirtualIndex(targetVirtual) as Number).toLong()
+                        tab.topVisibleLine = targetVirtual
+                        tab.selectedLineIndex = targetPhysical
+                        tab.selectedMatchColumn = targetIntervals.lastOrNull()?.first ?: 0
+                        tab.subLineScrollOffsetPx = 0f
+                        tab.searchNavigationGeneration++
+                        tab.searchWrapPromptPending = false
+                        tab.searchWrapIndicator = "Wrapped to bottom of filtered view"
+                        umbrix.ui.toast.ToastManager.info("Wrapped to bottom of filtered view (Match $totalFiltered of $totalFiltered)")
+                    }
                 }
             }
         } else {
@@ -378,16 +443,33 @@ object MainScreenSearchController {
 
                 if (nextInterval != null) {
                     centerOnLine(clampedAnchor, nextInterval.first)
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
                 } else {
                     val nextLine = result.findNextLine(clampedAnchor + 1L)
-                    val targetLine = if (nextLine >= 0L && nextLine <= maxLine) {
-                        nextLine
+                    if (nextLine >= 0L && nextLine <= maxLine) {
+                        val targetIntervals = getLineIntervals(nextLine)
+                        centerOnLine(nextLine, targetIntervals.firstOrNull()?.first ?: 0)
+                        tab.searchWrapPromptPending = false
+                        tab.searchWrapIndicator = null
                     } else {
-                        val wrapLine = result.findNextLine(minLine)
-                        if (wrapLine >= 0L && wrapLine <= maxLine) wrapLine else clampedAnchor
+                        // End of document reached
+                        if (!tab.searchWrapPromptPending) {
+                            tab.searchWrapPromptPending = true
+                            tab.searchWrapIndicator = "Reached end of file. Press Enter to wrap to top."
+                            umbrix.ui.toast.ToastManager.info("Reached end of file. Press Enter to wrap to top.")
+                        } else {
+                            // User confirmed wrap
+                            val wrapLine = result.findNextLine(minLine)
+                            if (wrapLine >= 0L && wrapLine <= maxLine) {
+                                val targetIntervals = getLineIntervals(wrapLine)
+                                centerOnLine(wrapLine, targetIntervals.firstOrNull()?.first ?: 0)
+                                tab.searchWrapPromptPending = false
+                                tab.searchWrapIndicator = "Wrapped to top of file"
+                                umbrix.ui.toast.ToastManager.info("Wrapped to top of file (Match 1 of ${result.totalMatches()})")
+                            }
+                        }
                     }
-                    val targetIntervals = getLineIntervals(targetLine)
-                    centerOnLine(targetLine, targetIntervals.firstOrNull()?.first ?: 0)
                 }
             } else {
                 val currentIntervals = if (isAnchorMatch) getLineIntervals(clampedAnchor) else emptyList()
@@ -399,16 +481,33 @@ object MainScreenSearchController {
 
                 if (prevInterval != null) {
                     centerOnLine(clampedAnchor, prevInterval.first)
+                    tab.searchWrapPromptPending = false
+                    tab.searchWrapIndicator = null
                 } else {
                     val prevLine = result.findPreviousLine(clampedAnchor - 1L)
-                    val targetLine = if (prevLine >= minLine) {
-                        prevLine
+                    if (prevLine >= minLine) {
+                        val targetIntervals = getLineIntervals(prevLine)
+                        centerOnLine(prevLine, targetIntervals.lastOrNull()?.first ?: 0)
+                        tab.searchWrapPromptPending = false
+                        tab.searchWrapIndicator = null
                     } else {
-                        val wrapLine = result.findPreviousLine(maxLine)
-                        if (wrapLine >= minLine) wrapLine else clampedAnchor
+                        // Start of document reached
+                        if (!tab.searchWrapPromptPending) {
+                            tab.searchWrapPromptPending = true
+                            tab.searchWrapIndicator = "Reached start of file. Press Shift+Enter to wrap to bottom."
+                            umbrix.ui.toast.ToastManager.info("Reached start of file. Press Shift+Enter to wrap to bottom.")
+                        } else {
+                            // User confirmed wrap
+                            val wrapLine = result.findPreviousLine(maxLine)
+                            if (wrapLine >= minLine) {
+                                val targetIntervals = getLineIntervals(wrapLine)
+                                centerOnLine(wrapLine, targetIntervals.lastOrNull()?.first ?: 0)
+                                tab.searchWrapPromptPending = false
+                                tab.searchWrapIndicator = "Wrapped to bottom of file"
+                                umbrix.ui.toast.ToastManager.info("Wrapped to bottom of file (Match ${result.totalMatches()} of ${result.totalMatches()})")
+                            }
+                        }
                     }
-                    val targetIntervals = getLineIntervals(targetLine)
-                    centerOnLine(targetLine, targetIntervals.lastOrNull()?.first ?: 0)
                 }
             }
         }

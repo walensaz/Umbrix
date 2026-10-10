@@ -196,10 +196,11 @@ fun SearchBar(
 
         // Telemetry Badge or Error Message
         if (errorMessage != null) {
+            val isWrapInfo = errorMessage.contains("wrap", ignoreCase = true)
             Badge(
-                label = errorMessage,
-                textColor = UmbrixTheme.colors.badgeErrorText,
-                backgroundColor = UmbrixTheme.colors.badgeErrorBackground
+                label = if (isWrapInfo) "🔁 $errorMessage" else errorMessage,
+                textColor = if (isWrapInfo) UmbrixTheme.colors.accentPrimary else UmbrixTheme.colors.badgeErrorText,
+                backgroundColor = if (isWrapInfo) UmbrixTheme.colors.surfaceElevated else UmbrixTheme.colors.badgeErrorBackground
             )
         } else if (isSearching) {
             Badge(

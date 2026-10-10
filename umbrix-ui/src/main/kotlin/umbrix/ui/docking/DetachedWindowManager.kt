@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,8 +60,13 @@ fun DetachedWindowsHost(
                 onCloseRequest = { onReDockTab(tab) },
                 state = windowState,
                 title = "Umbrix — ${tab.title}",
+                icon = umbrix.ui.icon.UmbrixIcon.painter,
                 undecorated = false
             ) {
+                DisposableEffect(window) {
+                    umbrix.ui.icon.UmbrixIcon.applyToWindow(window)
+                    onDispose {}
+                }
                 val currentTheme = ThemeRegistry.findByName(SettingsManager.currentSettings.themeName)
                     ?: ThemeRegistry.defaultTheme()
 

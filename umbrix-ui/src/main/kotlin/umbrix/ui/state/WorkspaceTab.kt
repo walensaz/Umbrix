@@ -25,7 +25,8 @@ class WorkspaceTab(
     val id: String = java.util.UUID.randomUUID().toString()
 ) {
     val isScratchpad: Boolean get() = scratchpadSession != null
-    val title: String get() = scratchpadSession?.title ?: session?.fileName() ?: java.io.File(filePath).name
+    val isTimelineTab: Boolean get() = filePath.startsWith("timeline://")
+    val title: String get() = if (isTimelineTab) "Incident Timeline" else scratchpadSession?.title ?: session?.fileName() ?: java.io.File(filePath).name
     var topVisibleLine: Long by mutableStateOf(initialTopVisibleLine)
     var subLineScrollOffsetPx: Float by mutableStateOf(0f)
     var searchQuery: String by mutableStateOf(initialSearchQuery)
@@ -58,6 +59,13 @@ class WorkspaceTab(
     var isSearchMatchCase: Boolean by mutableStateOf(false)
     var isSearchWholeWord: Boolean by mutableStateOf(false)
     var isSearchRegex: Boolean by mutableStateOf(false)
+
+    /**
+     * Set to true when search navigation reaches the end/start of the document and prompts
+     * the user to press Enter/Shift+Enter to confirm wrapping.
+     */
+    var searchWrapPromptPending: Boolean by mutableStateOf(false)
+    var searchWrapIndicator: String? by mutableStateOf(null)
 
     /**
      * Written by LogViewportCanvas on each layout pass so that navigation logic in

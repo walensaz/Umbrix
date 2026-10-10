@@ -69,6 +69,7 @@ fun DockPaneTabBar(
     onOpenScratchpadManager: (() -> Unit)? = null,
     onOpenFile: (() -> Unit)? = null,
     onNewScratchpad: (() -> Unit)? = null,
+    onOpenTimeline: (() -> Unit)? = null,
     leafId: String = "",
     modifier: Modifier = Modifier
 ) {
@@ -177,8 +178,13 @@ fun DockPaneTabBar(
                             .padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val prefix = when {
+                            tab.isTimelineTab -> "⏱️ "
+                            tab.isScratchpad -> "📝 "
+                            else -> "📄 "
+                        }
                         Text(
-                            text = (if (tab.isScratchpad) "📝 " else "") + tab.title,
+                            text = prefix + tab.title,
                             fontSize = 11.sp,
                             fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                             color = textColor
@@ -310,6 +316,17 @@ fun DockPaneTabBar(
                             onClick = {
                                 isPlusMenuOpen = false
                                 onOpenScratchpadManager()
+                            }
+                        )
+                    }
+                    if (onOpenTimeline != null) {
+                        UmbrixMenuItem(
+                            text = "Incident Timeline",
+                            shortcut = "Ctrl+Shift+T",
+                            icon = { UmbrixMenuGlyph("⏱️") },
+                            onClick = {
+                                isPlusMenuOpen = false
+                                onOpenTimeline()
                             }
                         )
                     }

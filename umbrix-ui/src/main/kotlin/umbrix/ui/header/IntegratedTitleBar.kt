@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -82,25 +83,12 @@ fun WindowScope.IntegratedTitleBar(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // --- Placeholder Logo Badge ---
-            Box(
-                modifier = Modifier
-                    .size(20.dp)
-                    .background(
-                        brush = Brush.linearGradient(
-                            listOf(UmbrixTheme.colors.progressGradientStart, UmbrixTheme.colors.progressGradientEnd)
-                        ),
-                        shape = RoundedCornerShape(4.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "U",
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Black
-                )
-            }
+            // --- Application Logo Badge ---
+            androidx.compose.foundation.Image(
+                painter = umbrix.ui.icon.UmbrixIcon.titleBarPainter,
+                contentDescription = "Umbrix Logo",
+                modifier = Modifier.size(22.dp)
+            )
 
             Spacer(modifier = Modifier.width(6.dp))
 

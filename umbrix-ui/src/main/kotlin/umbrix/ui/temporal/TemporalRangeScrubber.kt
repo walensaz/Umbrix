@@ -105,6 +105,7 @@ fun TemporalRangeScrubber(
     val minMicros = (firstTimestamp.get() as Number).toLong()
     val maxMicros = (lastTimestamp.get() as Number).toLong()
     val totalSpanMicros = max(1L, maxMicros - minMicros)
+    val isSingleDay = totalSpanMicros < 86_400_000_000L
 
     val startFractionState = remember(tab.filePath) {
         val initialStart = if (tab.isTemporalFocusActive && tab.temporalFocusStartMicros >= minMicros) {
@@ -192,6 +193,16 @@ fun TemporalRangeScrubber(
                 )
             }
 
+            val isSingleDay = totalSpanMicros < 86_400_000_000L
+            if (isSingleDay) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Badge(
+                    label = "Single Day (${formatDurationMicros(totalSpanMicros)})",
+                    textColor = colors.accentPrimary,
+                    backgroundColor = colors.surfaceElevated
+                )
+            }
+
             if (!session.isLogChronologicallyOrdered()) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Badge(
@@ -244,7 +255,7 @@ fun TemporalRangeScrubber(
             val handleRadiusPx = 7.dp.value * 2f // roughly 14px
 
             val gapResult = session.latencyGapResult()
-            val totalLines = session.totalLines()
+            val totalLines = (session.totalLines() as Number).toLong()
 
             // Pointer drag gesture detector for both handles
             Box(
@@ -368,22 +379,23 @@ fun TemporalRangeScrubber(
         }
 
         // --- Edge Labels (Start & End Times of document) ---
+        val showEdgeDates = totalSpanMicros >= 86_400_000_000L
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = formatEpochMicros(minMicros, includeDate = true),
+                text = formatEpochMicros(minMicros, includeDate = showEdgeDates),
                 fontSize = 10.sp,
                 color = colors.textMuted
             )
             Text(
-                text = "Total Duration: ${formatDurationMicros(totalSpanMicros)}",
+                text = "Total Duration: ${formatDurationMicros(totalSpanMicros)}${if (isSingleDay) " (Single Day)" else ""}",
                 fontSize = 10.sp,
                 color = colors.textDimmed
             )
             Text(
-                text = formatEpochMicros(maxMicros, includeDate = true),
+                text = formatEpochMicros(maxMicros, includeDate = showEdgeDates),
                 fontSize = 10.sp,
                 color = colors.textMuted
             )

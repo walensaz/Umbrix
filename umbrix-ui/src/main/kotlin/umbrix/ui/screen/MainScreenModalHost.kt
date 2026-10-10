@@ -281,7 +281,7 @@ fun MainScreenModalHost(
                 },
                 openTabTitles = openTabs.map { File(it.filePath).name },
                 activeTabIndex = activeTabIndex,
-                onToggleTimelineDrawer = { onSetTimelineDrawerOpen(!isTimelineDrawerOpen) },
+                onToggleTimelineDrawer = { onHandleMenuAction(MenuAction.ToggleTimelineDrawer) },
                 onSortTimelineChronologically = {
                     timelineManager.sortChronologically()
                     ToastManager.success("Timeline sorted chronologically")

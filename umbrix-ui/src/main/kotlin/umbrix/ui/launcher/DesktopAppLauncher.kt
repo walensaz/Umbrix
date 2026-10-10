@@ -66,6 +66,7 @@ object DesktopAppLauncher {
                     },
                     state = windowState,
                     title = "Umbrix — Industrial Log Workstation",
+                    icon = umbrix.ui.icon.UmbrixIcon.painter,
                     undecorated = true,
                     onPreviewKeyEvent = { keyEvent ->
                         WorkstationKeyDispatcher.handleKeyEvent(keyEvent)
@@ -79,6 +80,7 @@ object DesktopAppLauncher {
                     val menuActionFlow = remember(menuActionChannel) { menuActionChannel.receiveAsFlow() }
 
                     DisposableEffect(window) {
+                        umbrix.ui.icon.UmbrixIcon.applyToWindow(window)
                         window.maximizedBounds = DesktopWindowGeometry.usableBounds(
                             window.graphicsConfiguration.bounds,
                             Toolkit.getDefaultToolkit().getScreenInsets(window.graphicsConfiguration)
