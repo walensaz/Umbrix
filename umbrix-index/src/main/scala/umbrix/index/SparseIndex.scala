@@ -32,6 +32,8 @@ object SparseIndex {
 trait PhysicalLineIndexer extends AutoCloseable {
   def storageReader: LogStorageReader
   def totalLines: LineIndex
+  /** Bytes from file start whose lines are resolvable; below file size while progressive indexing runs. */
+  def indexedByteLimit: Long = storageReader.sizeBytes
   def byteOffsetForLine(lineIndex: LineIndex): ByteOffset
   def lineIndexForByteOffset(byteOffset: ByteOffset): LineIndex
   def getLineSlice(lineIndex: LineIndex): MemorySegment

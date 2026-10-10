@@ -3,6 +3,8 @@ package umbrix.core.search
 import com.google.re2j.Matcher
 import com.google.re2j.Pattern
 import java.lang.foreign.MemorySegment
+import java.lang.foreign.ValueLayout
+import scala.annotation.tailrec
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
@@ -236,7 +238,8 @@ class SimdSearchEngine(
   )(
     chunkScanner: (MemorySegment, Long, Long, Long, Roaring64NavigableMap) => Unit
   ): Roaring64NavigableMap = {
-    val fileSize: Long = storageReader.sizeBytes
+    // Matches past the indexed region cannot be mapped to lines; clamp until indexing completes.
+    val fileSize: Long = storageReader.sizeBytes.min(lineIndexer.indexedByteLimit)
     if (fileSize <= 0L || currentQueryId.get() != queryId) {
       new Roaring64NavigableMap()
     } else {
@@ -253,17 +256,21 @@ class SimdSearchEngine(
       var chunkIndex: Int = 0
       while (chunkIndex < chunkCount) {
         val currentChunkIndex: Int = chunkIndex
-        val chunkStartOffset: Long = currentChunkIndex.toLong * partitionChunkSizeBytes
-        val chunkEndOffset: Long = (chunkStartOffset + partitionChunkSizeBytes).min(fileSize)
-        val extendedChunkLength: Long = (chunkEndOffset - chunkStartOffset + overlapBytes).min(fileSize - chunkStartOffset)
+        val nominalStartOffset: Long = currentChunkIndex.toLong * partitionChunkSizeBytes
+        val nominalEndOffset: Long = (nominalStartOffset + partitionChunkSizeBytes).min(fileSize)
 
         tasks.add(() => {
           val localResultBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
           try {
             if (currentQueryId.get() == queryId && !Thread.currentThread().isInterrupted) {
-              val chunkSlice: MemorySegment = storageReader.readSlice(chunkStartOffset, extendedChunkLength)
-
-              chunkScanner(chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap)
+              // Neighbouring chunks compute the same aligned edge, so every line is owned by exactly one chunk.
+              val chunkStartOffset: Long = alignToLineStart(nominalStartOffset, fileSize)
+              val chunkEndOffset: Long = alignToLineStart(nominalEndOffset, fileSize)
+              if (chunkEndOffset > chunkStartOffset) {
+                val extendedChunkLength: Long = (chunkEndOffset - chunkStartOffset + overlapBytes).min(fileSize - chunkStartOffset)
+                val chunkSlice: MemorySegment = storageReader.readSlice(chunkStartOffset, extendedChunkLength)
+                chunkScanner(chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap)
+              }
             }
 
             if (currentQueryId.get() == queryId && !Thread.currentThread().isInterrupted) {
@@ -344,6 +351,36 @@ class SimdSearchEngine(
       }
       combinedBitmap
     }
+  }
+
+  /**
+   * Snaps `nominalOffset` forward to the first byte of a line (the byte after the next `\n` at or
+   * after `nominalOffset - 1`), or to `limit` if no newline remains.
+   */
+  private def alignToLineStart(nominalOffset: Long, limit: Long): Long = {
+    @tailrec
+    def firstNewlineIndex(window: MemorySegment, windowLength: Long, index: Long): Long = {
+      if (index >= windowLength) {
+        -1L
+      } else if (window.get(ValueLayout.JAVA_BYTE, index) == 0x0A.toByte) {
+        index
+      } else {
+        firstNewlineIndex(window, windowLength, index + 1L)
+      }
+    }
+
+    @tailrec
+    def findLineStart(scanOffset: Long): Long = {
+      if (scanOffset >= limit) {
+        limit
+      } else {
+        val windowLength: Long = (limit - scanOffset).min(65536L)
+        val relativeNewline: Long = firstNewlineIndex(storageReader.readSlice(scanOffset, windowLength), windowLength, 0L)
+        if (relativeNewline >= 0L) scanOffset + relativeNewline + 1L else findLineStart(scanOffset + windowLength)
+      }
+    }
+
+    if (nominalOffset <= 0L) 0L else if (nominalOffset >= limit) limit else findLineStart(nominalOffset - 1L)
   }
 
   /**

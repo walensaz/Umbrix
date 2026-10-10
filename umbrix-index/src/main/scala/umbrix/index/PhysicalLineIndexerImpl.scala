@@ -26,6 +26,8 @@ class PhysicalLineIndexerImpl(
     this.sparseIndex = newIndex
   }
 
+  override def indexedByteLimit: Long = sparseIndex.indexedBytes.min(storageReader.sizeBytes)
+
   def totalLines: LineIndex = {
     LineIndex(sparseIndex.totalLinesCount)
   }

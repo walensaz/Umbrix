@@ -12,6 +12,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path, Paths, StandardCopyOption, StandardOpenOption}
 import java.util.zip.CRC32
+import scala.annotation.tailrec
 import scala.util.control.NonFatal
 
 /**
@@ -32,7 +33,10 @@ object PersistentIndexCache {
 
   /** Binary magic signature 'UMBRIXI1' in hex. */
   private val MagicSignature: Long = 0x554D425249584931L
-  private val CacheFormatVersion: Int = 1
+  private val CacheFormatVersion: Int = 2 // v2 adds a CRC32 trailer over both tables
+  /** Bytes of the CRC32 body checksum appended after the tables. */
+  private val TrailerBytes: Long = 8L
+  private val MinimumCacheFileBytes: Long = 36L + TrailerBytes
   private val HeaderChecksumSampleSize: Long = 65536L // Sample first 64KB for instant header validation
   private val DefaultStaleThresholdMillis: Long = 7L * 24L * 3600L * 1000L // 7 days
 
@@ -114,98 +118,12 @@ object PersistentIndexCache {
         val fingerprint: String = computeFingerprint(path, storageReader)
         val cacheFile: Path = getCacheFilePath(fingerprint)
 
-        if (!Files.exists(cacheFile) || Files.size(cacheFile) < 36L) {
+        if (!Files.exists(cacheFile) || Files.size(cacheFile) < MinimumCacheFileBytes) {
           None
         } else {
           val channel: FileChannel = FileChannel.open(cacheFile, StandardOpenOption.READ)
           try {
-            val headerBuf: ByteBuffer = ByteBuffer.allocate(36)
-            channel.read(headerBuf)
-            headerBuf.flip()
-
-            val magic: Long = headerBuf.getLong
-            val version: Int = headerBuf.getInt
-            val cachedFileSize: Long = headerBuf.getLong
-            val totalLinesCount: Long = headerBuf.getLong
-            val superCount: Int = headerBuf.getInt
-            val intraCount: Int = headerBuf.getInt
-
-            if (magic != MagicSignature || version != CacheFormatVersion || cachedFileSize != storageReader.sizeBytes) {
-              logger.debug("Index cache mismatch or invalid magic for {}", path)
-              None
-            } else if (superCount < 0 || intraCount < 0 || superCount > 10000000 || intraCount > 256000000) {
-              logger.warn("Corrupt index cache entry counts in {}", cacheFile)
-              None
-            } else {
-              val superTable = new LongArrayList(superCount)
-              val intraTable = new IntArrayList(intraCount)
-
-              // Read superStrideOffsets in bulk (8 bytes each)
-              val superByteLength: Int = superCount * 8
-              if (superByteLength > 0) {
-                val superBuf: ByteBuffer = ByteBuffer.allocate(superByteLength)
-                var readBytes: Int = 0
-                while (readBytes < superByteLength) {
-                  val count: Int = channel.read(superBuf)
-                  if (count < 0) {
-                    readBytes = superByteLength
-                  } else {
-                    readBytes += count
-                  }
-                }
-                superBuf.flip()
-                val longBuf = superBuf.asLongBuffer()
-                val superArray = new Array[Long](superCount)
-                longBuf.get(superArray)
-                var si: Int = 0
-                while (si < superCount) {
-                  superTable.add(superArray(si))
-                  si += 1
-                }
-              }
-
-              // Read intraStrideDeltas in bulk (4 bytes each)
-              val intraByteLength: Int = intraCount * 4
-              if (intraByteLength > 0) {
-                val intraBuf: ByteBuffer = ByteBuffer.allocate(intraByteLength)
-                var readBytes: Int = 0
-                while (readBytes < intraByteLength) {
-                  val count: Int = channel.read(intraBuf)
-                  if (count < 0) {
-                    readBytes = intraByteLength
-                  } else {
-                    readBytes += count
-                  }
-                }
-                intraBuf.flip()
-                val intBuf = intraBuf.asIntBuffer()
-                val intArray = new Array[Int](intraCount)
-                intBuf.get(intArray)
-                var ii: Int = 0
-                while (ii < intraCount) {
-                  intraTable.add(intArray(ii))
-                  ii += 1
-                }
-              }
-
-              // Refresh cache file access time for LRU tracking
-              try {
-                Files.setLastModifiedTime(cacheFile, FileTime.fromMillis(System.currentTimeMillis()))
-              } catch {
-                case NonFatal(_) => ()
-              }
-
-              logger.info(
-                "Instantly loaded cached index for {} ({} lines, {} superblocks, {} intra entries) from {}",
-                path.getFileName,
-                totalLinesCount,
-                superCount,
-                intraCount,
-                cacheFile.getFileName
-              )
-
-              Some(new TwoLevelSparseIndex(superTable, intraTable, totalLinesCount))
-            }
+            readValidatedIndex(channel, Files.size(cacheFile), storageReader.sizeBytes, path, cacheFile)
           } finally {
             channel.close()
           }
@@ -215,6 +133,99 @@ object PersistentIndexCache {
       case NonFatal(e) =>
         logger.warn("Failed to load index cache for {}: {}", path, e.getMessage)
         None
+    }
+  }
+
+  /**
+   * Strictly validates and decodes a cache file. Any size, count, short-read or checksum
+   * inconsistency yields `None` so a damaged cache can never produce silently wrong line offsets.
+   */
+  private def readValidatedIndex(
+    channel: FileChannel,
+    cacheFileBytes: Long,
+    expectedLogFileBytes: Long,
+    logPath: Path,
+    cacheFile: Path
+  ): Option[TwoLevelSparseIndex] = {
+    val headerBuf: ByteBuffer = ByteBuffer.allocate(36)
+    if (!readFully(channel, headerBuf)) {
+      None
+    } else {
+      headerBuf.flip()
+      val magic: Long = headerBuf.getLong
+      val version: Int = headerBuf.getInt
+      val cachedFileSize: Long = headerBuf.getLong
+      val totalLinesCount: Long = headerBuf.getLong
+      val superCount: Int = headerBuf.getInt
+      val intraCount: Int = headerBuf.getInt
+
+      val countsPlausible: Boolean =
+        superCount >= 1 && superCount <= 10000000 &&
+          intraCount > (superCount - 1) * SparseIndex.IntraEntriesPerSuperblock &&
+          intraCount <= superCount * SparseIndex.IntraEntriesPerSuperblock
+
+      if (magic != MagicSignature || version != CacheFormatVersion || cachedFileSize != expectedLogFileBytes) {
+        logger.debug("Index cache mismatch or invalid magic for {}", logPath)
+        None
+      } else if (!countsPlausible) {
+        logger.warn("Corrupt index cache entry counts in {}", cacheFile)
+        None
+      } else if (cacheFileBytes != 36L + superCount.toLong * 8L + intraCount.toLong * 4L + TrailerBytes) {
+        logger.warn("Truncated or oversized index cache file {}", cacheFile)
+        None
+      } else {
+        val superBuf: ByteBuffer = ByteBuffer.allocate(superCount * 8)
+        val intraBuf: ByteBuffer = ByteBuffer.allocate(intraCount * 4)
+        val trailerBuf: ByteBuffer = ByteBuffer.allocate(TrailerBytes.toInt)
+        if (!readFully(channel, superBuf) || !readFully(channel, intraBuf) || !readFully(channel, trailerBuf)) {
+          logger.warn("Short read while loading index cache {}", cacheFile)
+          None
+        } else {
+          superBuf.flip()
+          intraBuf.flip()
+          trailerBuf.flip()
+          val bodyChecksum = new CRC32()
+          bodyChecksum.update(superBuf.duplicate())
+          bodyChecksum.update(intraBuf.duplicate())
+          if (bodyChecksum.getValue != trailerBuf.getLong) {
+            logger.warn("Index cache checksum mismatch in {}", cacheFile)
+            None
+          } else {
+            val superArray = new Array[Long](superCount)
+            superBuf.asLongBuffer().get(superArray)
+            val intraArray = new Array[Int](intraCount)
+            intraBuf.asIntBuffer().get(intraArray)
+
+            // Refresh cache file access time for LRU tracking
+            try {
+              Files.setLastModifiedTime(cacheFile, FileTime.fromMillis(System.currentTimeMillis()))
+            } catch {
+              case NonFatal(_) => ()
+            }
+
+            logger.info(
+              "Instantly loaded cached index for {} ({} lines, {} superblocks, {} intra entries) from {}",
+              logPath.getFileName,
+              totalLinesCount,
+              superCount,
+              intraCount,
+              cacheFile.getFileName
+            )
+            Some(new TwoLevelSparseIndex(LongArrayList.wrap(superArray), IntArrayList.wrap(intraArray), totalLinesCount))
+          }
+        }
+      }
+    }
+  }
+
+  @tailrec
+  private def readFully(channel: FileChannel, buffer: ByteBuffer): Boolean = {
+    if (!buffer.hasRemaining) {
+      true
+    } else if (channel.read(buffer) < 0) {
+      false
+    } else {
+      readFully(channel, buffer)
     }
   }
 
@@ -231,60 +242,57 @@ object PersistentIndexCache {
         val fingerprint: String = computeFingerprint(path, storageReader)
         val cacheDir: Path = getCacheDirectory
         val targetFile: Path = cacheDir.resolve(s"$fingerprint.idx")
-        val tempFile: Path = cacheDir.resolve(s".$fingerprint.tmp")
+        // Unique temp name so concurrent Umbrix instances never write the same file.
+        val tempFile: Path = Files.createTempFile(cacheDir, ".idx-", ".tmp")
 
         val superCount: Int = index.superStrideOffsets.size()
         val intraCount: Int = index.intraStrideDeltas.size()
-        val totalBytes: Long = 36L + (superCount.toLong * 8L) + (intraCount.toLong * 4L)
+        val totalBytes: Long = 36L + (superCount.toLong * 8L) + (intraCount.toLong * 4L) + TrailerBytes
 
-        val channel: FileChannel = FileChannel.open(
-          tempFile,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.WRITE,
-          StandardOpenOption.TRUNCATE_EXISTING
-        )
-        try {
-          // Write 36-byte header
-          val headerBuf: ByteBuffer = ByteBuffer.allocate(36)
-          headerBuf.putLong(MagicSignature)
-          headerBuf.putInt(CacheFormatVersion)
-          headerBuf.putLong(storageReader.sizeBytes)
-          headerBuf.putLong(index.totalLinesCount)
-          headerBuf.putInt(superCount)
-          headerBuf.putInt(intraCount)
-          headerBuf.flip()
-          channel.write(headerBuf)
+        val superBuf: ByteBuffer = ByteBuffer.allocate(superCount * 8)
+        superBuf.asLongBuffer().put(index.superStrideOffsets.toLongArray)
+        val intraBuf: ByteBuffer = ByteBuffer.allocate(intraCount * 4)
+        intraBuf.asIntBuffer().put(index.intraStrideDeltas.toIntArray)
 
-          // Write SuperStride table
-          if (superCount > 0) {
-            val superBuf: ByteBuffer = ByteBuffer.allocate(superCount * 8)
-            val superArray = index.superStrideOffsets.toLongArray
-            val longBuf = superBuf.asLongBuffer()
-            longBuf.put(superArray)
-            superBuf.position(0)
-            superBuf.limit(superCount * 8)
-            channel.write(superBuf)
-          }
+        val bodyChecksum = new CRC32()
+        bodyChecksum.update(superBuf.duplicate())
+        bodyChecksum.update(intraBuf.duplicate())
 
-          // Write IntraStride table
-          if (intraCount > 0) {
-            val intraBuf: ByteBuffer = ByteBuffer.allocate(intraCount * 4)
-            val intArray = index.intraStrideDeltas.toIntArray
-            val intBuf = intraBuf.asIntBuffer()
-            intBuf.put(intArray)
-            intraBuf.position(0)
-            intraBuf.limit(intraCount * 4)
-            channel.write(intraBuf)
-          }
-        } finally {
-          channel.close()
-        }
+        val headerBuf: ByteBuffer = ByteBuffer.allocate(36)
+        headerBuf.putLong(MagicSignature)
+        headerBuf.putInt(CacheFormatVersion)
+        headerBuf.putLong(storageReader.sizeBytes)
+        headerBuf.putLong(index.totalLinesCount)
+        headerBuf.putInt(superCount)
+        headerBuf.putInt(intraCount)
+        headerBuf.flip()
+
+        val trailerBuf: ByteBuffer = ByteBuffer.allocate(TrailerBytes.toInt)
+        trailerBuf.putLong(bodyChecksum.getValue)
+        trailerBuf.flip()
 
         try {
-          Files.move(tempFile, targetFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+          val channel: FileChannel = FileChannel.open(tempFile, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
+          try {
+            Seq(headerBuf, superBuf, intraBuf, trailerBuf).foreach { buffer =>
+              while (buffer.hasRemaining) {
+                channel.write(buffer)
+              }
+            }
+          } finally {
+            channel.close()
+          }
+
+          try {
+            Files.move(tempFile, targetFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+          } catch {
+            case _: java.nio.file.AtomicMoveNotSupportedException =>
+              Files.move(tempFile, targetFile, StandardCopyOption.REPLACE_EXISTING)
+          }
         } catch {
-          case _: java.nio.file.AtomicMoveNotSupportedException =>
-            Files.move(tempFile, targetFile, StandardCopyOption.REPLACE_EXISTING)
+          case writeFailure: Throwable =>
+            Files.deleteIfExists(tempFile)
+            throw writeFailure
         }
 
         logger.info(

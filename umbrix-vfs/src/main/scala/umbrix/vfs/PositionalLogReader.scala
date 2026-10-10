@@ -2,6 +2,7 @@ package umbrix.vfs
 
 import java.lang.foreign.{Arena, MemorySegment}
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import umbrix.vfs.platform.{NativeIo, PagingAdvisory, PositionalIoHandle}
 
 /**
@@ -10,12 +11,14 @@ import umbrix.vfs.platform.{NativeIo, PagingAdvisory, PositionalIoHandle}
  * Reads directly into off-heap direct buffers without creating kernel section
  * locks on Windows (FILE_SHARE_DELETE) or risking SIGBUS crashes during truncation on Unix.
  *
- * Invariant & Memory Safety:
- * Employs a pre-allocated circular off-heap ring buffer (16MB default) for transient `readSlice`
- * operations. This eliminates the unbounded off-heap memory leak caused by repeated allocations
- * in an un-resettable shared Arena, preserving the strict <150MB RSS budget.
- * Callers requiring independent lifecycle control can supply their own `Arena` via `readSlice(offset, length, arena)`
- * or write directly into pre-allocated destination segments via `readInto`.
+ * Slice lifetime contract:
+ * a slice returned by `readSlice(offset, length)` is backed by a scratch buffer private to the
+ * calling thread and stays valid until that same thread calls `readSlice` again (or the reader
+ * closes). Threads therefore can never overwrite each other's data. Each thread's scratch buffer
+ * grows geometrically to the largest read it performed and is released when it is outgrown, when
+ * its thread dies, or on `close()`, so native memory is bounded by (live threads x largest read)
+ * instead of growing with the number of reads.
+ * Callers needing independent lifetimes can use `readSlice(offset, length, arena)` or `readInto`.
  */
 final class PositionalLogReader private (
     val path: Path,
@@ -24,17 +27,20 @@ final class PositionalLogReader private (
     val ringBufferCapacity: Long
 ) extends LogStorageReader {
 
-  @volatile private var isReaderClosed: Boolean = false
+  /** One thread's scratch buffer; its own shared arena lets us free it when outgrown. */
+  private final class ThreadScratch(val ownerThread: Thread, val arena: Arena, val segment: MemorySegment)
 
-  // Pre-allocated off-heap ring buffer (allocated ONCE in sharedArena)
-  private val ringSegment: MemorySegment = sharedArena.allocate(ringBufferCapacity, 64)
-  private val ringLock: AnyRef = new AnyRef()
-  private var currentRingOffset: Long = 0L
-  private val maxRingSlice: Long = ringBufferCapacity / 2L // 8MB maximum single slice in ring
+  @volatile private var isReaderClosed: Boolean = false
+  private val scratchByThread: ConcurrentHashMap[Thread, ThreadScratch] = new ConcurrentHashMap[Thread, ThreadScratch]()
 
   def sizeBytes: Long = {
     ensureOpen()
     ioHandle.sizeBytes
+  }
+
+  /** Total native bytes currently held by per-thread scratch buffers (diagnostics and tests). */
+  def scratchBytesAllocated: Long = {
+    scratchByThread.values().stream().mapToLong(scratch => scratch.segment.byteSize()).sum()
   }
 
   def readSlice(offset: Long, length: Long): MemorySegment = {
@@ -42,11 +48,9 @@ final class PositionalLogReader private (
     validateBounds(offset, length)
     if (length == 0L) {
       MemorySegment.NULL
-    } else if (length <= maxRingSlice) {
-      // Allocate from bounded circular ring buffer (zero leak, fixed memory footprint)
-      val alignedLength: Long = (length + 15L) & ~15L // 16-byte alignment
-      val claimOffset: Long = claimRingSpace(alignedLength)
-      val destinationSlice: MemorySegment = ringSegment.asSlice(claimOffset, length)
+    } else {
+      val scratchSegment: MemorySegment = scratchSegmentFor(length)
+      val destinationSlice: MemorySegment = scratchSegment.asSlice(0L, length)
       val bytesActuallyRead: Int = ioHandle.read(destinationSlice, offset, length)
       if (bytesActuallyRead <= 0) {
         MemorySegment.NULL
@@ -54,17 +58,6 @@ final class PositionalLogReader private (
         destinationSlice.asSlice(0L, bytesActuallyRead.toLong)
       } else {
         destinationSlice
-      }
-    } else {
-      // Fallback for rare single read exceeding maxRingSlice
-      val allocatedBuffer: MemorySegment = sharedArena.allocate(length, 64)
-      val bytesActuallyRead: Int = ioHandle.read(allocatedBuffer, offset, length)
-      if (bytesActuallyRead <= 0) {
-        MemorySegment.NULL
-      } else if (bytesActuallyRead.toLong < length) {
-        allocatedBuffer.asSlice(0L, bytesActuallyRead.toLong)
-      } else {
-        allocatedBuffer
       }
     }
   }
@@ -119,20 +112,53 @@ final class PositionalLogReader private (
         PagingAdvisory.trimWorkingSet()
         ioHandle.close()
       } finally {
-        sharedArena.close()
+        try {
+          scratchByThread.values().forEach(scratch => scratch.arena.close())
+          scratchByThread.clear()
+        } finally {
+          sharedArena.close()
+        }
       }
     }
   }
 
-  private def claimRingSpace(alignedLength: Long): Long = {
-    ringLock.synchronized {
-      if (currentRingOffset + alignedLength > ringBufferCapacity) {
-        currentRingOffset = 0L
+  /** Returns the calling thread's scratch segment, replacing it with a larger one when needed. */
+  private def scratchSegmentFor(requiredLength: Long): MemorySegment = {
+    val callingThread: Thread = Thread.currentThread()
+    val existingScratch: ThreadScratch = scratchByThread.get(callingThread)
+    if (existingScratch != null && existingScratch.segment.byteSize() >= requiredLength) {
+      existingScratch.segment
+    } else {
+      releaseScratchOfDeadThreads()
+      val newCapacity: Long = nextPowerOfTwo(requiredLength.max(ringBufferCapacity))
+      val newArena: Arena = Arena.ofShared()
+      val newSegment: MemorySegment = try {
+        newArena.allocate(newCapacity, 64)
+      } catch {
+        case allocationFailure: Throwable =>
+          newArena.close()
+          throw allocationFailure
       }
-      val claimed: Long = currentRingOffset
-      currentRingOffset += alignedLength
-      claimed
+      scratchByThread.put(callingThread, new ThreadScratch(callingThread, newArena, newSegment))
+      if (existingScratch != null) {
+        existingScratch.arena.close()
+      }
+      newSegment
     }
+  }
+
+  private def releaseScratchOfDeadThreads(): Unit = {
+    scratchByThread.values().removeIf { scratch =>
+      val isDead: Boolean = !scratch.ownerThread.isAlive
+      if (isDead) {
+        scratch.arena.close()
+      }
+      isDead
+    }
+  }
+
+  private def nextPowerOfTwo(value: Long): Long = {
+    if (value <= 1L) 1L else java.lang.Long.highestOneBit(value - 1L) << 1
   }
 
   private def ensureOpen(): Unit = {
@@ -153,7 +179,8 @@ final class PositionalLogReader private (
 
 object PositionalLogReader {
 
-  val DefaultRingBufferCapacity: Long = 16L * 1024L * 1024L // 16MB
+  /** Initial per-thread scratch capacity; larger reads grow it geometrically. */
+  val DefaultRingBufferCapacity: Long = 1L * 1024L * 1024L // 1MB
 
   def open(path: Path, ringBufferCapacity: Long = DefaultRingBufferCapacity): PositionalLogReader = {
     val handle: PositionalIoHandle = NativeIo.openPositional(path)

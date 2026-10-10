@@ -372,7 +372,7 @@ object QueryParser {
             }
           case QueryToken.RegexTerm(patternText, offset) =>
             try {
-              val compiledPattern: Pattern = Pattern.compile(patternText)
+              val compiledPattern: Pattern = Pattern.compile(patternText, Pattern.MULTILINE)
               Right(QueryAst.Regex(compiledPattern))
             } catch {
               case err: PatternSyntaxException =>

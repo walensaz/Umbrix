@@ -29,7 +29,9 @@ import scala.annotation.tailrec
 class TwoLevelSparseIndex(
   val superStrideOffsets: LongArrayList,
   val intraStrideDeltas: IntArrayList,
-  val totalLinesCount: Long
+  val totalLinesCount: Long,
+  /** Bytes covered by this index; `Long.MaxValue` means the whole file (complete index). */
+  val indexedBytes: Long = Long.MaxValue
 ) {
 
   inline def totalLines: LineIndex = LineIndex(totalLinesCount)
@@ -241,7 +243,7 @@ object TwoLevelSparseIndex {
     state: IndexBuildState
   ): Unit = {
     if (chunkLength > 0L) {
-      val preferredSpecies = VectorScanner.preferredSpecies
+      val preferredSpecies = ByteVector.SPECIES_PREFERRED
       val vectorByteWidth = VectorScanner.vectorByteWidth
       val targetByte: Byte = 0x0A.toByte
       val nativeByteOrder = java.nio.ByteOrder.nativeOrder()
@@ -482,7 +484,8 @@ object TwoLevelSparseIndex {
       val initialSnapshot: TwoLevelSparseIndex = new TwoLevelSparseIndex(
         new LongArrayList(superTable),
         new IntArrayList(intraTable),
-        initialLines
+        initialLines,
+        initialBytesScanned
       )
       onInitialChunkReady(initialSnapshot)
       onChunkUpdate(initialSnapshot, initialBytesScanned, fileSize, initialLines)
@@ -533,7 +536,8 @@ object TwoLevelSparseIndex {
                   val snapshot: TwoLevelSparseIndex = new TwoLevelSparseIndex(
                     new LongArrayList(superTable),
                     new IntArrayList(intraTable),
-                    linesFound
+                    linesFound,
+                    fileOffset
                   )
                   onChunkUpdate(snapshot, fileOffset, fileSize, linesFound)
                 }
