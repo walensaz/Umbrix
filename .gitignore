@@ -43,6 +43,7 @@ tmp/
 *.pem
 *.key
 
-# Exclude documentation for code-only repository commits
+# Exclude internal documentation for code repository, but include public README
 *.md
+!README.md
 docs/
