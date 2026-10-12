@@ -148,7 +148,7 @@ val createAppImage by tasks.registering {
             jpackageBin.absolutePath,
             "--type", "app-image",
             "--name", "Umbrix",
-            "--app-version", "0.1.0",
+            "--app-version", "1.0.0",
             "--vendor", "Umbrix",
             "--input", jpackageInput.absolutePath,
             "--main-jar", shadowJarFile.name,
@@ -195,7 +195,7 @@ val packagePortableZip by tasks.registering(Zip::class) {
                  else "linux-x64"
 
     archiveBaseName.set("Umbrix")
-    archiveVersion.set("0.1.0")
+    archiveVersion.set("1.0.0")
     archiveClassifier.set("$osName-portable")
     destinationDirectory.set(distDir)
 
@@ -231,7 +231,7 @@ val packageDmg by tasks.registering {
             jpackageBin.absolutePath,
             "--type", "dmg",
             "--name", "Umbrix",
-            "--app-version", "0.1.0",
+            "--app-version", "1.0.0",
             "--vendor", "Umbrix",
             "--input", jpackageInput.absolutePath,
             "--main-jar", shadowJarFile.name,
@@ -284,7 +284,7 @@ val packageMsi by tasks.registering {
             jpackageBin.absolutePath,
             "--type", "msi",
             "--name", "Umbrix",
-            "--app-version", "0.1.0",
+            "--app-version", "1.0.0",
             "--vendor", "Umbrix",
             "--input", jpackageInput.absolutePath,
             "--main-jar", shadowJarFile.name,

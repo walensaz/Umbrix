@@ -2,7 +2,7 @@
 ; Produces self-contained Windows installer with Explorer context menu and file associations.
 
 #define MyAppName "Umbrix"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "1.0.0"
 #define MyAppPublisher "Umbrix"
 #define MyAppURL "https://github.com/Umbrix/umbrix"
 #define MyAppExeName "Umbrix.exe"

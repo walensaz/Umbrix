@@ -1,7 +1,7 @@
 cask "umbrix" do
   arch arm: "aarch64", intel: "x64"
 
-  version "0.1.0"
+  version "1.0.0"
   sha256 arm:   :no_check,
          intel: :no_check
 
