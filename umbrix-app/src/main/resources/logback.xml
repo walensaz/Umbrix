@@ -1,5 +1,7 @@
 <configuration scan="true" scanPeriod="30 seconds">
 
+    <shutdownHook class="ch.qos.logback.core.hook.DefaultShutdownHook" />
+
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>

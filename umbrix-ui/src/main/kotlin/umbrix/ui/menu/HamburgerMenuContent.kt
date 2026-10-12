@@ -207,6 +207,12 @@ fun ColumnScope.HamburgerMenuContent(
         onClick = { onAction(MenuAction.DiagnosticReport) }
     )
 
+    UmbrixMenuItem(
+        text = "Open Logs Folder",
+        icon = { UmbrixMenuGlyph("📁") },
+        onClick = { onAction(MenuAction.OpenLogsFolder) }
+    )
+
     UmbrixMenuSeparator()
 
     // --- Section 6: About & Exit ---

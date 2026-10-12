@@ -85,7 +85,9 @@ import java.io.File
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun UmbrixMainScreen(
-    initialFilePath: String?,
+    initialFilePath: String? = null,
+    initialFilePaths: List<String> = emptyList(),
+    incomingFiles: Flow<List<String>> = emptyFlow(),
     droppedFilePath: String? = null,
     onClearDroppedFilePath: () -> Unit = {},
     onActiveDocTitleChange: (String?) -> Unit = {},
@@ -680,6 +682,7 @@ fun UmbrixMainScreen(
                 is MenuAction.SetTheme -> Unit
                 is MenuAction.OpenSettings -> onSetSettingsDialogVisible(true)
                 is MenuAction.DiagnosticReport -> generateDiagnosticReport()
+                is MenuAction.OpenLogsFolder -> umbrix.ui.util.openLogsDirectory()
                 is MenuAction.KeyboardShortcuts -> isShortcutsDialogVisible = true
                 is MenuAction.About -> isAboutDialogVisible = true
                 is MenuAction.Exit -> onExitRequest()
@@ -1013,7 +1016,13 @@ fun UmbrixMainScreen(
             } catch (_: Throwable) {}
         }
 
-        if (!initialFilePath.isNullOrBlank()) {
+        if (initialFilePaths.isNotEmpty()) {
+            for (filePath in initialFilePaths) {
+                if (filePath.isNotBlank()) {
+                    loadLogFile(filePath, asNewTab = true)
+                }
+            }
+        } else if (!initialFilePath.isNullOrBlank()) {
             loadLogFile(initialFilePath, asNewTab = true)
         } else if (SettingsManager.currentSettings.restoreSessionOnStartup) {
             val filesToRestore = SettingsManager.currentSettings.lastOpenedFiles.filter { File(it).exists() }
@@ -1054,6 +1063,16 @@ fun UmbrixMainScreen(
         if (!droppedFilePath.isNullOrBlank()) {
             loadLogFile(droppedFilePath, asNewTab = true)
             onClearDroppedFilePath()
+        }
+    }
+
+    LaunchedEffect(incomingFiles) {
+        incomingFiles.collect { files ->
+            for (filePath in files) {
+                if (filePath.isNotBlank() && filePath != "__BRING_TO_FRONT__") {
+                    loadLogFile(filePath, asNewTab = true)
+                }
+            }
         }
     }
 

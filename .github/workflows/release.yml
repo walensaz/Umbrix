@@ -1,0 +1,111 @@
+name: Release Umbrix Workstation
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Distribution
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Azul Zulu JDK 21 (Gradle Daemon)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Set up Azul Zulu JDK 25 (Compilation & Packaging Toolchain)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Build Windows Portable ZIP & MSI Installer
+        run: |
+          .\gradlew.bat :umbrix-app:packagePortableZip :umbrix-app:packageMsi --no-daemon
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-distribution
+          path: |
+            umbrix-app/build/dist/*.zip
+            umbrix-app/build/dist/*.msi
+
+  build-macos:
+    name: Build macOS Distribution (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Azul Zulu JDK 21 (Gradle Daemon)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Set up Azul Zulu JDK 25 (Compilation & Packaging Toolchain)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Generate macOS ICNS from Iconset
+        run: |
+          iconutil -c icns umbrix-ui/src/main/resources/icons/Umbrix.iconset -o umbrix-ui/src/main/resources/icons/umbrix.icns
+
+      - name: Build macOS Portable ZIP & DMG
+        run: |
+          ./gradlew :umbrix-app:packagePortableZip :umbrix-app:packageDmg --no-daemon
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-distribution
+          path: |
+            umbrix-app/build/dist/*.zip
+            umbrix-app/build/dist/*.dmg
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f \( -name "*.zip" -o -name "*.dmg" -o -name "*.msi" \) -exec cp {} release-files/ \;
+          ls -la release-files
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          draft: false
+          prerelease: true
+          generate_release_notes: true

@@ -43,7 +43,12 @@ object DesktopAppLauncher {
     @JvmStatic
     fun launch(args: Array<String>) {
         WorkstationErrorHandler.install()
-        val initialFilePath: String? = args.firstOrNull { !it.startsWith("--") }
+        val initialFilePaths: List<String> = args.filter { !it.startsWith("--") && it.isNotBlank() }
+
+        if (initialFilePaths.isNotEmpty() && SingleInstanceCoordinator.tryForwardToRunningInstance(initialFilePaths)) {
+            // Forwarded to running workstation instance; exit this launch process cleanly
+            return
+        }
 
         try {
             application {
@@ -79,6 +84,10 @@ object DesktopAppLauncher {
                     val menuActionChannel = remember { Channel<MenuAction>(Channel.UNLIMITED) }
                     val menuActionFlow = remember(menuActionChannel) { menuActionChannel.receiveAsFlow() }
 
+                    // External file opening channel (IPC + macOS OpenFileHandler)
+                    val incomingFilesChannel = remember { Channel<List<String>>(Channel.UNLIMITED) }
+                    val incomingFilesFlow = remember(incomingFilesChannel) { incomingFilesChannel.receiveAsFlow() }
+
                     DisposableEffect(window) {
                         umbrix.ui.icon.UmbrixIcon.applyToWindow(window)
                         window.maximizedBounds = DesktopWindowGeometry.usableBounds(
@@ -104,7 +113,37 @@ object DesktopAppLauncher {
                             }
                         }
                         window.dropTarget = dropTarget
+
+                        // Register macOS AWT OpenFileHandler for Finder right-click "Open With" and Dock drops
+                        if (java.awt.Desktop.isDesktopSupported()) {
+                            try {
+                                val desktop = java.awt.Desktop.getDesktop()
+                                if (desktop.isSupported(java.awt.Desktop.Action.APP_OPEN_FILE)) {
+                                    desktop.setOpenFileHandler { event ->
+                                        val paths = event.files?.mapNotNull { it?.absolutePath } ?: emptyList()
+                                        if (paths.isNotEmpty()) {
+                                            incomingFilesChannel.trySend(paths)
+                                            try {
+                                                window.toFront()
+                                                window.requestFocus()
+                                            } catch (_: Throwable) {}
+                                        }
+                                    }
+                                }
+                            } catch (_: Throwable) {}
+                        }
+
+                        // Start single-instance loopback IPC listener for Windows/Linux/macOS terminal CLI forwards
+                        SingleInstanceCoordinator.startServer { files ->
+                            incomingFilesChannel.trySend(files)
+                            try {
+                                window.toFront()
+                                window.requestFocus()
+                            } catch (_: Throwable) {}
+                        }
+
                         onDispose {
+                            SingleInstanceCoordinator.stopServer()
                             window.dropTarget = null
                         }
                     }
@@ -145,7 +184,9 @@ object DesktopAppLauncher {
                             )
 
                             UmbrixMainScreen(
-                                initialFilePath = initialFilePath,
+                                initialFilePath = initialFilePaths.firstOrNull(),
+                                initialFilePaths = initialFilePaths,
+                                incomingFiles = incomingFilesFlow,
                                 droppedFilePath = droppedFilePath,
                                 onClearDroppedFilePath = { droppedFilePath = null },
                                 onActiveDocTitleChange = { activeDocTitle = it },

@@ -36,6 +36,7 @@ sealed interface MenuAction {
     // --- Modals & Diagnostics ---
     data object OpenSettings : MenuAction
     data object DiagnosticReport : MenuAction
+    data object OpenLogsFolder : MenuAction
     data object KeyboardShortcuts : MenuAction
     data object About : MenuAction
 

@@ -48,6 +48,10 @@ fun AboutDialog(
         showCloseButton = true,
         isScrollable = false,
         actions = {
+            DefaultButton(onClick = { umbrix.ui.util.openLogsDirectory() }) {
+                Text("View Application Logs")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
             DefaultButton(onClick = onDismiss) {
                 Text("Close")
             }

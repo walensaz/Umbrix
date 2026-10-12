@@ -142,3 +142,28 @@ fun parseTimestampStringToMicros(rawInput: String, baseDateMicros: Long? = null)
 
     return null
 }
+
+/**
+ * Opens the application log directory (~/.umbrix/logs) in the native desktop file manager.
+ */
+fun openLogsDirectory() {
+    val logsDir = File(System.getProperty("user.home"), ".umbrix/logs")
+    if (!logsDir.exists()) {
+        logsDir.mkdirs()
+    }
+    try {
+        if (java.awt.Desktop.isDesktopSupported() && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.OPEN)) {
+            java.awt.Desktop.getDesktop().open(logsDir)
+        } else {
+            val osName = System.getProperty("os.name").lowercase(Locale.ROOT)
+            when {
+                osName.contains("win") -> ProcessBuilder("explorer.exe", logsDir.absolutePath).start()
+                osName.contains("mac") -> ProcessBuilder("open", logsDir.absolutePath).start()
+                else -> ProcessBuilder("xdg-open", logsDir.absolutePath).start()
+            }
+        }
+    } catch (_: Throwable) {
+        // Defensive suppression
+    }
+}
+
