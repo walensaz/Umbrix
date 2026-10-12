@@ -95,14 +95,31 @@ class SimdSearchEngine(
     queryText: String,
     progressConsumer: SearchResult => Unit
   ): Either[QueryParseError, SearchResult] = {
-    QueryParser.parse(queryText).map(ast => executeProgressive(ast, progressConsumer))
+    searchProgressive(queryText, 0L, progressConsumer)
+  }
+
+  /**
+   * Parses the raw query text and executes it with progressive partial result notifications,
+   * prioritizing chunk scanning from the partition covering `anchorByteOffset`.
+   *
+   * @param queryText raw search expression
+   * @param anchorByteOffset absolute byte offset used to prioritize chunk scheduling
+   * @param progressConsumer callback receiving incremental SearchResult snapshots as matches are discovered
+   * @return `Right(SearchResult)` with final complete result or `Left(QueryParseError)` on syntax failure
+   */
+  def searchProgressive(
+    queryText: String,
+    anchorByteOffset: Long,
+    progressConsumer: SearchResult => Unit
+  ): Either[QueryParseError, SearchResult] = {
+    QueryParser.parse(queryText).map(ast => executeProgressive(ast, anchorByteOffset, progressConsumer))
   }
 
   /**
    * Evaluates a structured `QueryAst` and returns the matching physical lines synchronously.
    */
   def execute(ast: QueryAst): SearchResult = {
-    executeProgressive(ast, _ => ())
+    executeProgressive(ast, 0L, _ => ())
   }
 
   /**
@@ -112,9 +129,21 @@ class SimdSearchEngine(
     ast: QueryAst,
     progressConsumer: SearchResult => Unit
   ): SearchResult = {
+    executeProgressive(ast, 0L, progressConsumer)
+  }
+
+  /**
+   * Evaluates a structured `QueryAst` with progressive notifications, prioritizing scanning from
+   * the partition covering `anchorByteOffset`.
+   */
+  def executeProgressive(
+    ast: QueryAst,
+    anchorByteOffset: Long,
+    progressConsumer: SearchResult => Unit
+  ): SearchResult = {
     val queryId: Long = currentQueryId.incrementAndGet()
     val startNanos: Long = System.nanoTime()
-    val matchingBitmap: Roaring64NavigableMap = evaluateAst(ast, progressConsumer, startNanos, queryId)
+    val matchingBitmap: Roaring64NavigableMap = evaluateAst(ast, progressConsumer, startNanos, queryId, anchorByteOffset)
     val durationNanos: Long = System.nanoTime() - startNanos
     val isComplete: Boolean = currentQueryId.get() == queryId
     val finalResult: SearchResult = SearchResult(
@@ -133,7 +162,8 @@ class SimdSearchEngine(
     ast: QueryAst,
     progressConsumer: SearchResult => Unit,
     startNanos: Long,
-    queryId: Long
+    queryId: Long,
+    anchorByteOffset: Long = 0L
   ): Roaring64NavigableMap = {
     if (currentQueryId.get() != queryId) {
       new Roaring64NavigableMap()
@@ -146,21 +176,21 @@ class SimdSearchEngine(
           if (needleText.isEmpty) {
             new Roaring64NavigableMap()
           } else if (isCaseSensitive) {
-            searchLiteralParallel(needleText, progressConsumer, startNanos, queryId)
+            searchLiteralParallel(needleText, progressConsumer, startNanos, queryId, anchorByteOffset)
           } else if (isAscii(needleText)) {
-            searchLiteralCaseInsensitiveParallel(needleText, progressConsumer, startNanos, queryId)
+            searchLiteralCaseInsensitiveParallel(needleText, progressConsumer, startNanos, queryId, anchorByteOffset)
           } else {
             val caseInsensitiveRegex: Pattern = Pattern.compile("(?i)" + Pattern.quote(needleText))
-            searchRegexParallel(caseInsensitiveRegex, progressConsumer, startNanos, queryId)
+            searchRegexParallel(caseInsensitiveRegex, progressConsumer, startNanos, queryId, anchorByteOffset)
           }
 
         case QueryAst.Regex(pattern) =>
-          searchRegexParallel(pattern, progressConsumer, startNanos, queryId)
+          searchRegexParallel(pattern, progressConsumer, startNanos, queryId, anchorByteOffset)
 
         case QueryAst.LevelFilter(logLevel) =>
           val levelToken: String = logLevel.toString.toUpperCase
           val levelRegex: Pattern = Pattern.compile("\\b" + Pattern.quote(levelToken) + "\\b")
-          searchRegexParallel(levelRegex, progressConsumer, startNanos, queryId)
+          searchRegexParallel(levelRegex, progressConsumer, startNanos, queryId, anchorByteOffset)
 
         case QueryAst.TimeRange(sinceMicrosOption, untilMicrosOption) =>
           temporalTableOption match {
@@ -182,11 +212,11 @@ class SimdSearchEngine(
           }
 
         case QueryAst.And(leftAst, rightAst) =>
-          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId)
+          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId, anchorByteOffset)
           if (leftBitmap.isEmpty || currentQueryId.get() != queryId) {
             leftBitmap
           } else {
-            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId)
+            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId, anchorByteOffset)
             val result: Roaring64NavigableMap = new Roaring64NavigableMap()
             result.or(leftBitmap)
             result.and(rightBitmap)
@@ -194,11 +224,11 @@ class SimdSearchEngine(
           }
 
         case QueryAst.Or(leftAst, rightAst) =>
-          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId)
+          val leftBitmap: Roaring64NavigableMap = evaluateAst(leftAst, _ => (), startNanos, queryId, anchorByteOffset)
           if (currentQueryId.get() != queryId) {
             leftBitmap
           } else {
-            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId)
+            val rightBitmap: Roaring64NavigableMap = evaluateAst(rightAst, _ => (), startNanos, queryId, anchorByteOffset)
             val result: Roaring64NavigableMap = new Roaring64NavigableMap()
             result.or(leftBitmap)
             result.or(rightBitmap)
@@ -206,7 +236,7 @@ class SimdSearchEngine(
           }
 
         case QueryAst.Not(innerAst) =>
-          val innerBitmap: Roaring64NavigableMap = evaluateAst(innerAst, _ => (), startNanos, queryId)
+          val innerBitmap: Roaring64NavigableMap = evaluateAst(innerAst, _ => (), startNanos, queryId, anchorByteOffset)
           val allLinesBitmap: Roaring64NavigableMap = new Roaring64NavigableMap()
           allLinesBitmap.addRange(0L, lineIndexer.totalLines.value)
           allLinesBitmap.andNot(innerBitmap)
@@ -227,6 +257,7 @@ class SimdSearchEngine(
    * @param progressConsumer callback receiving incremental partial SearchResult snapshots
    * @param startNanos search commencement timestamp in nanoseconds
    * @param queryId unique generation ID identifying this search pass for cancellation checking
+   * @param anchorByteOffset absolute byte offset used to prioritize task scheduling order
    * @param chunkScanner function scanning a single off-heap chunk slice and recording matches into local bitmap
    * @return combined Roaring64NavigableMap containing all matching line numbers
    */
@@ -234,7 +265,8 @@ class SimdSearchEngine(
     overlapBytes: Long,
     progressConsumer: SearchResult => Unit,
     startNanos: Long,
-    queryId: Long
+    queryId: Long,
+    anchorByteOffset: Long = 0L
   )(
     chunkScanner: (MemorySegment, Long, Long, Long, Roaring64NavigableMap) => Unit
   ): Roaring64NavigableMap = {
@@ -253,9 +285,12 @@ class SimdSearchEngine(
       val lastProgressTimeNanos: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(startNanos)
       val throttleIntervalNanos: Long = 50_000_000L // 50 ms
 
-      var chunkIndex: Int = 0
-      while (chunkIndex < chunkCount) {
-        val currentChunkIndex: Int = chunkIndex
+      val clampedAnchorOffset: Long = math.max(0L, math.min(fileSize - 1L, anchorByteOffset))
+      val anchorChunkIndex: Int = math.max(0, math.min(chunkCount - 1, (clampedAnchorOffset / partitionChunkSizeBytes).toInt))
+
+      var step: Int = 0
+      while (step < chunkCount) {
+        val currentChunkIndex: Int = (anchorChunkIndex + step) % chunkCount
         val nominalStartOffset: Long = currentChunkIndex.toLong * partitionChunkSizeBytes
         val nominalEndOffset: Long = (nominalStartOffset + partitionChunkSizeBytes).min(fileSize)
 
@@ -317,7 +352,7 @@ class SimdSearchEngine(
 
           java.lang.Boolean.TRUE
         })
-        chunkIndex += 1
+        step += 1
       }
 
       try {
@@ -406,12 +441,13 @@ class SimdSearchEngine(
     needleText: String,
     progressConsumer: SearchResult => Unit,
     startNanos: Long,
-    queryId: Long
+    queryId: Long,
+    anchorByteOffset: Long = 0L
   ): Roaring64NavigableMap = {
     val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
     val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
 
-    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId) {
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId, anchorByteOffset) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         VectorSubstringScanner.scanLiteral(
           chunkSlice,
@@ -432,12 +468,13 @@ class SimdSearchEngine(
     needleText: String,
     progressConsumer: SearchResult => Unit,
     startNanos: Long,
-    queryId: Long
+    queryId: Long,
+    anchorByteOffset: Long = 0L
   ): Roaring64NavigableMap = {
     val needleBytes: Array[Byte] = needleText.getBytes(StandardCharsets.UTF_8)
     val overlapBytes: Long = (needleBytes.length - 1).max(0).toLong
 
-    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId) {
+    dispatchParallelSearch(overlapBytes, progressConsumer, startNanos, queryId, anchorByteOffset) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         VectorSubstringScanner.scanLiteralCaseInsensitive(
           chunkSlice,
@@ -458,9 +495,10 @@ class SimdSearchEngine(
     pattern: Pattern,
     progressConsumer: SearchResult => Unit,
     startNanos: Long,
-    queryId: Long
+    queryId: Long,
+    anchorByteOffset: Long = 0L
   ): Roaring64NavigableMap = {
-    dispatchParallelSearch(0L, progressConsumer, startNanos, queryId) {
+    dispatchParallelSearch(0L, progressConsumer, startNanos, queryId, anchorByteOffset) {
       (chunkSlice, chunkStartOffset, chunkEndOffset, extendedChunkLength, localResultBitmap) =>
         val offHeapCharSequence: OffHeapCharSequence = new OffHeapCharSequence(chunkSlice, 0L, extendedChunkLength.toInt)
         val matcher: Matcher = pattern.matcher(offHeapCharSequence)

@@ -133,6 +133,7 @@ fun DetachedWindowsHost(
                             if (tab.isScratchpad) {
                                 ScratchpadEditorCanvas(
                                     session = tab.scratchpadSession!!,
+                                    tab = tab,
                                     onSaveRequested = {
                                         umbrix.ui.toast.ToastManager.success("Scratchpad saved")
                                     },

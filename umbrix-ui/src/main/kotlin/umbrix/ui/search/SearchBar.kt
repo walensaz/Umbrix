@@ -168,7 +168,7 @@ fun SearchBar(
                     onNavigatePrev()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
+                enabled = (isSearching && queryText.isNotBlank()) || (searchResult != null && !searchResult.isEmpty())
             ) {
                 Text("↑ (Shift+Enter)")
             }
@@ -186,7 +186,7 @@ fun SearchBar(
                     onNavigateNext()
                     try { focusRequester.requestFocus() } catch (_: Throwable) {}
                 },
-                enabled = !isSearching && searchResult != null && !searchResult.isEmpty()
+                enabled = (isSearching && queryText.isNotBlank()) || (searchResult != null && !searchResult.isEmpty())
             ) {
                 Text("↓ (Enter)")
             }

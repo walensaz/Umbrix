@@ -185,4 +185,38 @@ class SimdSearchEngineTest extends FunSuite {
       storageReader.close()
     }
   }
+
+  test("SimdSearchEngine executes anchor-prioritized progressive search successfully") {
+    val tempFile: File = File.createTempFile("umbrix-anchor-search-test-", ".log")
+    tempFile.deleteOnExit()
+    val content: Array[Byte] = (
+      ("2026-10-11 12:00:00 [INFO] Line A\n" * 1000) +
+      "2026-10-11 12:01:00 [ERROR] Target Match Near Anchor\n" +
+      ("2026-10-11 12:02:00 [INFO] Line B\n" * 1000)
+    ).getBytes(StandardCharsets.UTF_8)
+    Files.write(tempFile.toPath, content)
+
+    val storageReader: LogStorageReader = MemoryMappedLogReader.open(tempFile.toPath)
+    try {
+      val indexer: PhysicalLineIndexerImpl = PhysicalLineIndexerImpl.build(storageReader)
+      val searchEngine: SimdSearchEngine = new SimdSearchEngine(storageReader, indexer)
+      try {
+        val anchorByte: Long = indexer.byteOffsetForLine(LineIndex(1000L)).value
+        val snapshots = new java.util.ArrayList[SearchResult]()
+        val result = searchEngine.searchProgressive("Target Match", anchorByte, res => snapshots.add(res))
+          .getOrElse(fail("Query parse failed"))
+
+        assertEquals(result.totalMatches, 1L)
+        assertEquals(result.findNextLine(1000L), 1000L)
+        assert(!snapshots.isEmpty)
+        val lastSnapshot = snapshots.get(snapshots.size() - 1)
+        assertEquals(lastSnapshot.totalMatches, 1L)
+        assertEquals(lastSnapshot.isComplete, true)
+      } finally {
+        searchEngine.close()
+      }
+    } finally {
+      storageReader.close()
+    }
+  }
 }

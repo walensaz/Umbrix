@@ -409,6 +409,16 @@ fun UmbrixMainScreen(
 
     fun triggerSearch(queryText: String, immediate: Boolean = false) {
         val tab = currentTab ?: return
+        if (tab.isScratchpad) {
+            MainScreenSearchController.triggerScratchpadSearch(
+                tab = tab,
+                coroutineScope = coroutineScope,
+                queryText = queryText,
+                immediate = immediate,
+                onSearchErrorMessageChange = { searchErrorMessage = it }
+            )
+            return
+        }
         val session = tab.session ?: return
         MainScreenSearchController.triggerSearch(
             tab = tab,
@@ -422,6 +432,10 @@ fun UmbrixMainScreen(
 
     fun navigateSearch(forward: Boolean) {
         val tab = currentTab ?: return
+        if (tab.isScratchpad) {
+            MainScreenSearchController.navigateScratchpadSearch(tab, forward)
+            return
+        }
         val session = tab.session ?: return
         MainScreenSearchController.navigateSearch(tab, session, forward)
     }
@@ -454,6 +468,39 @@ fun UmbrixMainScreen(
 
     fun exportSubFile() {
         val tab = currentTab ?: return
+        if (tab.isScratchpad) {
+            val scratchpad = tab.scratchpadSession ?: return
+            val defaultName = if (scratchpad.title.endsWith(".log") || scratchpad.title.endsWith(".txt")) {
+                "excerpt_${scratchpad.title}"
+            } else {
+                "excerpt_${scratchpad.title}.log"
+            }
+            val destinationPath = showNativeSaveFileDialog(defaultName) ?: return
+
+            coroutineScope.launch {
+                try {
+                    statusMessageText = "Exporting scratchpad excerpt to $destinationPath..."
+                    val targetFile = File(destinationPath)
+                    withContext(Dispatchers.IO) {
+                        val textToExport = if (tab.isFilteredView && tab.searchResult != null) {
+                            val lines = scratchpad.content.lines()
+                            val matchingIndices = tab.searchResult!!.matchingLines()
+                            lines.filterIndexed { index, _ -> matchingIndices.contains(index.toLong()) }.joinToString("\n")
+                        } else {
+                            scratchpad.content
+                        }
+                        targetFile.writeText(textToExport, Charsets.UTF_8)
+                    }
+                    statusMessageText = "Exported scratchpad excerpt to ${targetFile.name}. Opening in new tab..."
+                    ToastManager.success("Exported sub-file: ${targetFile.name}")
+                    loadLogFile(destinationPath, asNewTab = true)
+                } catch (e: Throwable) {
+                    if (ForensicErrorReportGenerator.isFatal(e)) throw e
+                    WorkstationErrorHandler.reportException(e)
+                }
+            }
+            return
+        }
         val session = tab.session ?: return
         val defaultName = "excerpt_${File(tab.filePath).nameWithoutExtension}.log"
         val destinationPath = showNativeSaveFileDialog(defaultName) ?: return
@@ -1069,6 +1116,12 @@ fun UmbrixMainScreen(
                     onToggleBookmarkFilter = { handleMenuAction(MenuAction.ToggleBookmarkFilter) },
                     onToggleFilterView = {
                         currentTab?.let { tab ->
+                            if (tab.isScratchpad) {
+                                if (tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                                    tab.isFilteredView = !tab.isFilteredView
+                                }
+                                return@let
+                            }
                             val searchResult = tab.searchResult
                             val session = tab.session
                             if (searchResult != null && !searchResult.isEmpty && session != null) {
@@ -1108,9 +1161,11 @@ fun UmbrixMainScreen(
                     onNavigateNext = {
                         val tab = currentTab
                         if (tab != null) {
-                            if (tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                            if (tab.isSearching) {
                                 navigateSearch(forward = true)
-                            } else if (!tab.isSearching && tab.searchQuery.isNotBlank()) {
+                            } else if (tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                                navigateSearch(forward = true)
+                            } else if (tab.searchQuery.isNotBlank()) {
                                 triggerSearch(tab.searchQuery, immediate = true)
                             }
                         }
@@ -1118,9 +1173,11 @@ fun UmbrixMainScreen(
                     onNavigatePrev = {
                         val tab = currentTab
                         if (tab != null) {
-                            if (tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                            if (tab.isSearching) {
                                 navigateSearch(forward = false)
-                            } else if (!tab.isSearching && tab.searchQuery.isNotBlank()) {
+                            } else if (tab.searchResult != null && !tab.searchResult!!.isEmpty) {
+                                navigateSearch(forward = false)
+                            } else if (tab.searchQuery.isNotBlank()) {
                                 triggerSearch(tab.searchQuery, immediate = true)
                             }
                         }

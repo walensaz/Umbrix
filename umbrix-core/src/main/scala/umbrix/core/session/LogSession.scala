@@ -379,7 +379,30 @@ class LogSession(
     queryText: String,
     progressConsumer: java.util.function.Consumer[SearchResult]
   ): Either[QueryParseError, SearchResult] = {
-    searchEngine.searchProgressive(queryText, (res: SearchResult) => progressConsumer.accept(res))
+    searchProgressive(queryText, 0L, progressConsumer)
+  }
+
+  /**
+   * Executes a search query across the log session with progressive partial result notifications,
+   * prioritizing chunk scanning from the partition covering `anchorLine`.
+   *
+   * @param queryText raw search expression
+   * @param anchorLine 0-based physical line index used to prioritize chunk scheduling
+   * @param progressConsumer callback receiving incremental SearchResult snapshots as matches are discovered
+   * @return `Right(SearchResult)` with final complete result or `Left(QueryParseError)` on syntax failure
+   */
+  def searchProgressive(
+    queryText: String,
+    anchorLine: Long,
+    progressConsumer: java.util.function.Consumer[SearchResult]
+  ): Either[QueryParseError, SearchResult] = {
+    val total: Long = indexer.totalLines.value
+    val anchorByte: Long = if (anchorLine >= 0L && anchorLine < total) {
+      indexer.byteOffsetForLine(LineIndex(anchorLine)).value
+    } else {
+      0L
+    }
+    searchEngine.searchProgressive(queryText, anchorByte, (res: SearchResult) => progressConsumer.accept(res))
   }
 
   /**

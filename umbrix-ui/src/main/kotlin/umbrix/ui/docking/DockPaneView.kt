@@ -166,6 +166,7 @@ fun DockPaneView(
                 activeTab.isScratchpad -> {
                     ScratchpadEditorCanvas(
                         session = activeTab.scratchpadSession!!,
+                        tab = activeTab,
                         onSaveRequested = {
                             umbrix.ui.toast.ToastManager.success("Scratchpad saved")
                         },

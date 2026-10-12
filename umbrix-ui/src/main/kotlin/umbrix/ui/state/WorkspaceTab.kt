@@ -61,6 +61,12 @@ class WorkspaceTab(
     var isSearchRegex: Boolean by mutableStateOf(false)
 
     /**
+     * Queued navigation direction when user presses Enter / F3 while search indexing is still in flight.
+     * true = forward, false = backward, null = no pending navigation.
+     */
+    var pendingSearchNavigation: Boolean? by mutableStateOf(null)
+
+    /**
      * Set to true when search navigation reaches the end/start of the document and prompts
      * the user to press Enter/Shift+Enter to confirm wrapping.
      */

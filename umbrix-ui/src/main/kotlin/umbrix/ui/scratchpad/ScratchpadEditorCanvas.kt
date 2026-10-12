@@ -24,8 +24,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalDensity
+import kotlinx.coroutines.launch
+import umbrix.ui.screen.MainScreenSearchController
+import umbrix.ui.state.WorkspaceTab
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,11 +92,14 @@ import kotlin.math.max
 @Composable
 fun ScratchpadEditorCanvas(
     session: ScratchpadSession,
+    tab: WorkspaceTab? = null,
     onSaveRequested: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val colors = UmbrixTheme.colors
     val fonts = UmbrixFonts.current
+    val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
 
     val editorFontFamily = remember(fonts.editorFontFamily) {
         EditorTypography.resolvedEditorFontFamily(fonts.editorFontFamily)
@@ -99,20 +107,24 @@ fun ScratchpadEditorCanvas(
     val fontFeatureSettings = remember(fonts.enableLigatures) {
         EditorTypography.resolveFontFeatureSettings(fonts.enableLigatures)
     }
+    val lineHeightPx = with(density) {
+        (fonts.editorFontSizePt * fonts.lineHeightMultiplier).sp.toPx()
+    }
 
     var isSearchBarOpen by remember { mutableStateOf(false) }
     var isReplaceBarOpen by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf("") }
+    var inCanvasSearchQuery by remember { mutableStateOf("") }
     var replaceQuery by remember { mutableStateOf("") }
-    var isMatchCase by remember { mutableStateOf(false) }
-    var isWholeWord by remember { mutableStateOf(false) }
-    var isRegex by remember { mutableStateOf(false) }
+    var inCanvasMatchCase by remember { mutableStateOf(false) }
+    var inCanvasWholeWord by remember { mutableStateOf(false) }
+    var inCanvasRegex by remember { mutableStateOf(false) }
     var currentMatchIndex by remember { mutableStateOf(0) }
     var wrapIndicator by remember { mutableStateOf<String?>(null) }
     var isWrapPending by remember { mutableStateOf(false) }
 
     val searchFocusRequester = remember { FocusRequester() }
     val editorFocusRequester = remember { FocusRequester() }
+    val scrollState = rememberScrollState()
 
     // Internal text field value tracking selection and cursor
     var textFieldValue by remember(session.id) {
@@ -125,6 +137,15 @@ fun ScratchpadEditorCanvas(
         if (session.content != newValue.text) {
             session.content = newValue.text
             session.isDirty = true
+            if (tab != null && tab.searchQuery.isNotBlank()) {
+                MainScreenSearchController.triggerScratchpadSearch(
+                    tab = tab,
+                    coroutineScope = coroutineScope,
+                    queryText = tab.searchQuery,
+                    immediate = false,
+                    onSearchErrorMessageChange = {}
+                )
+            }
         }
     }
 
@@ -133,18 +154,40 @@ fun ScratchpadEditorCanvas(
         max(1, contentText.count { it == '\n' } + 1)
     }
 
+    // Resolve unified search settings from WorkspaceTab when available, falling back to in-canvas state
+    val activeSearchQuery = if (tab != null && tab.searchQuery.isNotBlank()) {
+        tab.searchQuery
+    } else {
+        inCanvasSearchQuery
+    }
+    val activeMatchCase = if (tab != null && tab.searchQuery.isNotBlank()) {
+        tab.isSearchMatchCase
+    } else {
+        inCanvasMatchCase
+    }
+    val activeWholeWord = if (tab != null && tab.searchQuery.isNotBlank()) {
+        tab.isSearchWholeWord
+    } else {
+        inCanvasWholeWord
+    }
+    val activeRegex = if (tab != null && tab.searchQuery.isNotBlank()) {
+        tab.isSearchRegex
+    } else {
+        inCanvasRegex
+    }
+
     // Resolve search match intervals within the scratchpad text
-    val matchIntervals = remember(contentText, searchQuery, isMatchCase, isWholeWord, isRegex) {
-        if (searchQuery.isBlank()) {
+    val matchIntervals = remember(contentText, activeSearchQuery, activeMatchCase, activeWholeWord, activeRegex) {
+        if (activeSearchQuery.isBlank()) {
             emptyList()
         } else {
-            val needles = extractSearchNeedles(searchQuery, isRegex = isRegex)
+            val needles = extractSearchNeedles(activeSearchQuery, isRegex = activeRegex)
             findNeedleIntervals(
                 rawText = contentText,
                 needles = needles,
-                isMatchCase = isMatchCase,
-                isWholeWord = isWholeWord,
-                isRegex = isRegex
+                isMatchCase = activeMatchCase,
+                isWholeWord = activeWholeWord,
+                isRegex = activeRegex
             )
         }
     }
@@ -159,8 +202,37 @@ fun ScratchpadEditorCanvas(
         }
     }
 
+    // Watch external search navigation events from the main workstation SearchBar / F3
+    LaunchedEffect(tab?.searchNavigationGeneration) {
+        if (tab != null && matchIntervals.isNotEmpty()) {
+            val selectedLine = tab.selectedLineIndex ?: 0L
+            val selectedCol = tab.selectedMatchColumn
+            val lineStarts = MainScreenSearchController.computeLineStartOffsets(contentText)
+            val selectedOffset = if (selectedLine.toInt() in lineStarts.indices && selectedCol >= 0) {
+                lineStarts[selectedLine.toInt()] + selectedCol
+            } else {
+                -1
+            }
+            val matchIdx = if (selectedOffset >= 0) {
+                matchIntervals.indexOfFirst { it.first == selectedOffset }
+            } else -1
+
+            if (matchIdx >= 0) {
+                currentMatchIndex = matchIdx
+                val interval = matchIntervals[matchIdx]
+                textFieldValue = textFieldValue.copy(
+                    selection = TextRange(interval.first, interval.second)
+                )
+                val targetScrollY = (selectedLine * lineHeightPx - 150f).coerceAtLeast(0f).toInt()
+                coroutineScope.launch {
+                    scrollState.animateScrollTo(targetScrollY)
+                }
+            }
+        }
+    }
+
     // Visual transformation for log level highlights and active search needles
-    val visualTransformation = remember(colors, matchIntervals, currentMatchIndex, searchQuery) {
+    val visualTransformation = remember(colors, matchIntervals, currentMatchIndex, activeSearchQuery) {
         VisualTransformation { original ->
             val annotated = buildAnnotatedString {
                 append(original.text)
@@ -203,6 +275,17 @@ fun ScratchpadEditorCanvas(
         textFieldValue = textFieldValue.copy(
             selection = TextRange(interval.first, interval.second)
         )
+        val lineStarts = MainScreenSearchController.computeLineStartOffsets(contentText)
+        val lineIdx = MainScreenSearchController.findLineIndexForOffset(lineStarts, interval.first)
+        val col = interval.first - lineStarts[lineIdx]
+        if (tab != null) {
+            tab.selectedLineIndex = lineIdx.toLong()
+            tab.selectedMatchColumn = col
+        }
+        val targetScrollY = (lineIdx * lineHeightPx - 150f).coerceAtLeast(0f).toInt()
+        coroutineScope.launch {
+            scrollState.animateScrollTo(targetScrollY)
+        }
     }
 
     fun navigateMatch(forward: Boolean) {
@@ -256,14 +339,14 @@ fun ScratchpadEditorCanvas(
         if (matchIntervals.isEmpty()) return
         val count = matchIntervals.size
         val effectiveRegex = when {
-            isRegex -> Regex(searchQuery, if (isMatchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
-            isWholeWord -> Regex("\\b${Regex.escape(searchQuery)}\\b", if (isMatchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
+            activeRegex -> Regex(activeSearchQuery, if (activeMatchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
+            activeWholeWord -> Regex("\\b${Regex.escape(activeSearchQuery)}\\b", if (activeMatchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
             else -> null
         }
         val newText = if (effectiveRegex != null) {
             contentText.replace(effectiveRegex, replaceQuery)
         } else {
-            contentText.replace(searchQuery, replaceQuery, ignoreCase = !isMatchCase)
+            contentText.replace(activeSearchQuery, replaceQuery, ignoreCase = !activeMatchCase)
         }
         updateContent(TextFieldValue(newText))
         ToastManager.success("Replaced $count occurrences")
@@ -402,11 +485,21 @@ fun ScratchpadEditorCanvas(
                     Spacer(modifier = Modifier.width(6.dp))
 
                     TextField(
-                        value = searchQuery,
+                        value = activeSearchQuery,
                         onValueChange = {
-                            searchQuery = it
+                            inCanvasSearchQuery = it
                             isWrapPending = false
                             wrapIndicator = null
+                            if (tab != null) {
+                                tab.searchQuery = it
+                                MainScreenSearchController.triggerScratchpadSearch(
+                                    tab = tab,
+                                    coroutineScope = coroutineScope,
+                                    queryText = it,
+                                    immediate = false,
+                                    onSearchErrorMessageChange = {}
+                                )
+                            }
                         },
                         modifier = Modifier
                             .width(260.dp)
@@ -434,8 +527,20 @@ fun ScratchpadEditorCanvas(
                     ScratchModeButton(
                         label = "Aa",
                         tooltip = "Match Case (Alt+C)",
-                        isActive = isMatchCase,
-                        onClick = { isMatchCase = !isMatchCase }
+                        isActive = activeMatchCase,
+                        onClick = {
+                            inCanvasMatchCase = !activeMatchCase
+                            if (tab != null) {
+                                tab.isSearchMatchCase = !activeMatchCase
+                                MainScreenSearchController.triggerScratchpadSearch(
+                                    tab = tab,
+                                    coroutineScope = coroutineScope,
+                                    queryText = activeSearchQuery,
+                                    immediate = true,
+                                    onSearchErrorMessageChange = {}
+                                )
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.width(3.dp))
@@ -444,8 +549,20 @@ fun ScratchpadEditorCanvas(
                     ScratchModeButton(
                         label = "|W|",
                         tooltip = "Match Whole Word (Alt+W)",
-                        isActive = isWholeWord,
-                        onClick = { isWholeWord = !isWholeWord }
+                        isActive = activeWholeWord,
+                        onClick = {
+                            inCanvasWholeWord = !activeWholeWord
+                            if (tab != null) {
+                                tab.isSearchWholeWord = !activeWholeWord
+                                MainScreenSearchController.triggerScratchpadSearch(
+                                    tab = tab,
+                                    coroutineScope = coroutineScope,
+                                    queryText = activeSearchQuery,
+                                    immediate = true,
+                                    onSearchErrorMessageChange = {}
+                                )
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.width(3.dp))
@@ -454,8 +571,20 @@ fun ScratchpadEditorCanvas(
                     ScratchModeButton(
                         label = ".*",
                         tooltip = "Regular Expression (Alt+R)",
-                        isActive = isRegex,
-                        onClick = { isRegex = !isRegex }
+                        isActive = activeRegex,
+                        onClick = {
+                            inCanvasRegex = !activeRegex
+                            if (tab != null) {
+                                tab.isSearchRegex = !activeRegex
+                                MainScreenSearchController.triggerScratchpadSearch(
+                                    tab = tab,
+                                    coroutineScope = coroutineScope,
+                                    queryText = activeSearchQuery,
+                                    immediate = true,
+                                    onSearchErrorMessageChange = {}
+                                )
+                            }
+                        }
                     )
 
                     Spacer(modifier = Modifier.width(6.dp))
@@ -486,7 +615,7 @@ fun ScratchpadEditorCanvas(
                             textColor = colors.accentPrimary,
                             backgroundColor = colors.surfaceElevated
                         )
-                    } else if (searchQuery.isNotBlank()) {
+                    } else if (activeSearchQuery.isNotBlank()) {
                         val count = matchIntervals.size
                         val currentStr = if (count > 0) "${currentMatchIndex + 1} of " else ""
                         Badge(
@@ -503,7 +632,20 @@ fun ScratchpadEditorCanvas(
                         fontSize = 13.sp,
                         color = colors.textMuted,
                         modifier = Modifier
-                            .clickable { isSearchBarOpen = false }
+                            .clickable {
+                                isSearchBarOpen = false
+                                inCanvasSearchQuery = ""
+                                if (tab != null) {
+                                    tab.searchQuery = ""
+                                    MainScreenSearchController.triggerScratchpadSearch(
+                                        tab = tab,
+                                        coroutineScope = coroutineScope,
+                                        queryText = "",
+                                        immediate = true,
+                                        onSearchErrorMessageChange = {}
+                                    )
+                                }
+                            }
                             .padding(4.dp)
                     )
                 }
@@ -546,12 +688,57 @@ fun ScratchpadEditorCanvas(
             }
         }
 
-        // --- Editor Canvas with Gutter & Hardware-Native Text ---
-        val lineNumbersText = remember(lineCount) {
-            (1..lineCount).joinToString("\n")
+        // --- Filtered View Logic ---
+        val isFiltered = tab?.isFilteredView == true && tab?.searchResult != null && !tab.searchResult!!.isEmpty
+        val matchingLinesBitmap = remember(tab?.searchResult) { tab?.searchResult?.matchingLines() }
+        val allContentLines = remember(contentText) { contentText.lines() }
+        val filteredLineIndices = remember(allContentLines.size, matchingLinesBitmap, isFiltered) {
+            if (isFiltered && matchingLinesBitmap != null) {
+                allContentLines.indices.filter { matchingLinesBitmap.contains(it.toLong()) }
+            } else null
         }
 
-        val scrollState = rememberScrollState()
+        // --- Filtered View Notification Banner ---
+        if (isFiltered && filteredLineIndices != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.surfaceElevated)
+                    .border(1.dp, colors.accentPrimary.copy(alpha = 0.5f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Badge(
+                        label = "FILTERED",
+                        textColor = colors.badgeSuccessText,
+                        backgroundColor = colors.badgeSuccessBackground
+                    )
+                    Text(
+                        text = "Showing ${filteredLineIndices.size} matching lines only",
+                        color = colors.textPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                OutlinedButton(onClick = { tab?.isFilteredView = false }) {
+                    Text("Show All Lines", fontSize = 11.sp)
+                }
+            }
+        }
+
+        // --- Editor Canvas with Gutter & Hardware-Native Text ---
+        val lineNumbersText = remember(lineCount, isFiltered, filteredLineIndices) {
+            if (isFiltered && filteredLineIndices != null) {
+                filteredLineIndices.map { it + 1 }.joinToString("\n")
+            } else {
+                (1..lineCount).joinToString("\n")
+            }
+        }
 
         Row(
             modifier = Modifier
@@ -581,29 +768,71 @@ fun ScratchpadEditorCanvas(
                 )
             }
 
-            // Editable Text Surface
+            // Text Surface (Filtered read-only lines or Editable BasicTextField)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .verticalScroll(scrollState)
             ) {
-                BasicTextField(
-                    value = textFieldValue,
-                    onValueChange = { updateContent(it) },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusRequester(editorFocusRequester),
-                    textStyle = TextStyle(
-                        fontFamily = editorFontFamily,
-                        fontSize = fonts.editorFontSizePt.sp,
-                        fontFeatureSettings = fontFeatureSettings,
-                        color = colors.textEditor,
-                        lineHeight = (fonts.editorFontSizePt * fonts.lineHeightMultiplier).sp
-                    ),
-                    cursorBrush = SolidColor(colors.accentPrimary),
-                    visualTransformation = visualTransformation
-                )
+                if (isFiltered && filteredLineIndices != null) {
+                    val filteredLinesText = remember(filteredLineIndices, allContentLines) {
+                        filteredLineIndices.map { allContentLines[it] }.joinToString("\n")
+                    }
+                    val filteredAnnotatedString = remember(filteredLinesText, colors, activeSearchQuery, activeMatchCase, activeWholeWord, activeRegex) {
+                        buildAnnotatedString {
+                            append(filteredLinesText)
+                            highlightLogLevels(filteredLinesText, colors)
+                            val needles = extractSearchNeedles(activeSearchQuery, isRegex = activeRegex)
+                            val intervals = findNeedleIntervals(
+                                rawText = filteredLinesText,
+                                needles = needles,
+                                isMatchCase = activeMatchCase,
+                                isWholeWord = activeWholeWord,
+                                isRegex = activeRegex
+                            )
+                            intervals.forEach { interval ->
+                                addStyle(
+                                    style = SpanStyle(
+                                        background = colors.searchHighlightActive,
+                                        color = colors.searchTextActive,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    start = interval.first,
+                                    end = interval.second
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = filteredAnnotatedString,
+                        style = TextStyle(
+                            fontFamily = editorFontFamily,
+                            fontSize = fonts.editorFontSizePt.sp,
+                            fontFeatureSettings = fontFeatureSettings,
+                            color = colors.textEditor,
+                            lineHeight = (fonts.editorFontSizePt * fonts.lineHeightMultiplier).sp
+                        ),
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    BasicTextField(
+                        value = textFieldValue,
+                        onValueChange = { updateContent(it) },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .focusRequester(editorFocusRequester),
+                        textStyle = TextStyle(
+                            fontFamily = editorFontFamily,
+                            fontSize = fonts.editorFontSizePt.sp,
+                            fontFeatureSettings = fontFeatureSettings,
+                            color = colors.textEditor,
+                            lineHeight = (fonts.editorFontSizePt * fonts.lineHeightMultiplier).sp
+                        ),
+                        cursorBrush = SolidColor(colors.accentPrimary),
+                        visualTransformation = visualTransformation
+                    )
+                }
             }
         }
     }
