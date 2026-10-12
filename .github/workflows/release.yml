@@ -119,5 +119,6 @@ jobs:
         with:
           files: release-files/*
           draft: false
-          prerelease: true
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
