@@ -1,0 +1,28 @@
+Umbrix Evaluation & Commercial Support License
+
+Copyright (c) 2026 Umbrix Contributors. All rights reserved.
+
+1. Grant of License
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to view,
+build, run, and evaluate the Software without restriction, subject to the
+following conditions:
+
+2. Honor-System Evaluation & Commercial Support
+Umbrix operates on an honor-system evaluation and support model:
+- Community & Evaluation: Free for personal projects, open-source work,
+  education, and unlimited evaluation in any commercial environment.
+- Personal License ($39): For individual developers using Umbrix regularly.
+- Commercial License ($69/seat): For organizations using Umbrix for daily
+  commercial operations.
+
+For full licensing details and team discounts, see COMMERCIAL_AND_LICENSING.md.
+
+3. Disclaimer of Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

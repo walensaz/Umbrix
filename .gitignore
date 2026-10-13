@@ -43,7 +43,9 @@ tmp/
 *.pem
 *.key
 
-# Exclude internal documentation for code repository, but include public README
+# Exclude internal documentation for code repository, but include public README and licensing
 *.md
 !README.md
+!COMMERCIAL_AND_LICENSING.md
 docs/
+

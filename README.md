@@ -136,6 +136,36 @@ Tools exposed: `search_logs`, `get_time_slice`, `extract_causal_context`, `get_e
 
 ---
 
+## Ecosystem Comparison: Umbrix vs. Other Viewers
+
+An honest, architectural comparison of trade-offs across log viewers and editors:
+
+| Capability | **Umbrix** | **klogg / glogg** (C++/Qt) | **lnav** (Terminal Curses) | **Sublime / UltraEdit** | **VS Code / Electron** |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Max File Capacity** | **100GB+** (64-bit continuous window) | ~10GB–20GB (C++ `mmap` limits) | ~5GB–10GB (bounded by terminal/RAM) | 2GB–5GB (slows on >2GB) | **<1.5GB** (OOMs V8 heap) |
+| **Memory Footprint** | **<150MB RSS** (0 bytes in GC heap) | 300MB – 1.5GB heap | 200MB – 1GB | 1GB – 4GB+ | **2GB+ / Crash** |
+| **Search Engine** | **AVX-512 SIMD** (15–25 GB/s) + RE2 | C++ Boyer-Moore / PCRE | SQLite + PCRE | Custom C++ regex | JavaScript RegExp (slow) |
+| **File Editing** | **Off-heap Piece Table** (never rewrites file) | Read-only | Read-only | In-memory full rewrite | In-memory buffer |
+| **Stack Traces** | **Two-Tier Folding** (SIMD + RoaringBitmap) | Basic wrap | Automatic format folding | Basic syntax folding | Basic syntax folding |
+| **UI & Rendering** | JetBrains Jewel + Skia GPU (60–120 FPS) | Functional 2000s Qt GUI | Terminal curses (keyboard only) | Polished text editor UI | Modern editor, slow on logs |
+| **AI Integration** | **Native Embedded MCP Server** | None | None | Copilot (fails on big files) | Copilot (fails on big files) |
+| **Trade-offs / Cons** | Bundled JDK 25 runtime (~85MB); not an IDE/LSP code editor | Dated UI; Windows mmap truncation bugs | Terminal only; no visual timeline scrubbers | Proprietary closed-source ($99/yr) | Chokes on files >1.5GB |
+
+---
+
+## License & Support
+
+Umbrix is free to download, use, and evaluate with zero feature caps or time limits.
+
+If Umbrix saves you or your company time, please consider supporting continued independent development:
+- **Personal License ($39):** For individual developers (perpetual license, valid across any machine or employer).
+- **Commercial Single Seat ($69):** For companies and professional work (perpetual license).
+- **Team Packs:** 5 seats for **$299**; 10 seats for **$549**.
+
+For full details, see [LICENSE](LICENSE) and [COMMERCIAL_AND_LICENSING.md](COMMERCIAL_AND_LICENSING.md).
+
+---
+
 ## Building from Source
 
 ### Prerequisites
@@ -161,3 +191,4 @@ Tools exposed: `search_logs`, `get_time_slice`, `extract_causal_context`, `get_e
 ./gradlew :umbrix-app:createMinRuntime
 ./gradlew :umbrix-app:packagePortableZip
 ```
+
