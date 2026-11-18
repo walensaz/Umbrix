@@ -1,0 +1,134 @@
+name: Release Umbrix Workstation
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-release:
+    name: Prepare Draft Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Create or update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+
+  build-windows:
+    name: Build Windows Distribution
+    needs: prepare-release
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Azul Zulu JDK 25 (Compilation & Packaging Toolchain)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Set up Azul Zulu JDK 21 (Gradle Daemon)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: Install WiX Toolset v5 for MSI packaging
+        run: |
+          $dotnetTools = "$env:USERPROFILE\.dotnet\tools"
+          $env:PATH = "$dotnetTools;$env:PATH"
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add --global WixToolset.Util.wixext/5.0.2
+          wix extension add --global WixToolset.UI.wixext/5.0.2
+          "$dotnetTools" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Build Windows Portable ZIP
+        run: |
+          .\gradlew.bat :umbrix-app:packagePortableZip --no-daemon
+
+      - name: Build Windows MSI Installer
+        run: |
+          .\gradlew.bat :umbrix-app:packageMsi --no-daemon
+        continue-on-error: true
+
+      - name: Upload Windows Assets Directly to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem -Path "umbrix-app/build/dist" -File | Where-Object { $_.Extension -in ".zip", ".msi" } | ForEach-Object { $_.FullName }
+          if (-not $files) { throw "No Windows release assets found in umbrix-app/build/dist" }
+          gh release upload "${{ github.ref_name }}" $files --repo "${{ github.repository }}" --clobber
+
+  build-macos:
+    name: Build macOS Distribution (Apple Silicon)
+    needs: prepare-release
+    if: ${{ !cancelled() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Azul Zulu JDK 25 (Compilation & Packaging Toolchain)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+
+      - name: Set up Azul Zulu JDK 21 (Gradle Daemon)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Generate macOS ICNS from Iconset
+        run: |
+          iconutil -c icns umbrix-ui/src/main/resources/icons/Umbrix.iconset -o umbrix-ui/src/main/resources/icons/umbrix.icns
+
+      - name: Build macOS Portable ZIP & DMG
+        run: |
+          ./gradlew :umbrix-app:packagePortableZip :umbrix-app:packageDmg --no-daemon
+
+      - name: Upload macOS Assets Directly to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(umbrix-app/build/dist/*.zip umbrix-app/build/dist/*.dmg)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No macOS release assets found in umbrix-app/build/dist" >&2
+            exit 1
+          fi
+          gh release upload "${{ github.ref_name }}" "${files[@]}" --repo "${{ github.repository }}" --clobber
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [prepare-release, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Publish Release as Latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false --latest

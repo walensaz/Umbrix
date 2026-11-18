@@ -1,0 +1,58 @@
+# Gradle build files & caches
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# JVM crash logs & profiling
+hs_err_pid*
+replay_pid*
+*.prof
+*.hprof
+
+# IDE - IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# IDE - VS Code / Metals / BSP
+.vscode/
+.bsp/
+.metals/
+.bloop/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Log outputs & temporary benchmarks
+*.log
+scratch/
+tmp/
+*.tmp
+
+# Kotlin compiler cache
+.kotlin/
+
+# Secrets & local environment
+.env*
+*.pem
+*.key
+
+# Exclude internal agent/implementation notes, local runbooks, and held-back private plugins
+AGENTS.md
+RELEASE_GUIDE.md
+docs/internal/
+plugins/**/docs/internal/
+plugins/umbrix-plugin-jvm/
+
+.aider*
+
+# AI Agent & IDE local directories
+.agents/
+.gemini/
+
