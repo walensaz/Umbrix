@@ -1,0 +1,51 @@
+Umbrix License
+==============
+
+Copyright (c) 2026 Zachary Walensa. All rights reserved.
+
+1. Grant of License & Evaluation (Beta / Early Release)
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of this software and associated documentation files (the
+"Software"), to download, build, install, inspect, and use the Software without
+feature restrictions, telemetry, DRM, or file-size limits.
+
+While Umbrix is in beta / early public release and before general availability
+(GA) commercial licensing is launched, no paid license is required for any
+evaluation or use. Use for personal projects, open-source work, academic
+research, and emergency incident triage is permanently free.
+
+2. Future Commercial Licensing (Post-GA)
+Once Umbrix reaches general availability and paid licensing becomes available,
+continued regular use in a commercial environment will require a perpetual
+license under the honor-system terms described in COMMERCIAL_AND_LICENSING.md:
+- Commercial License: Required when purchased or reimbursed by a company.
+- Personal License: For individuals purchasing with personal funds (not
+  reimbursed by an employer), valid on all personal and work machines used by
+  that individual.
+
+3. Source Code & Redistribution
+You may inspect and modify the source code and compile private builds for your
+own permitted use. You may not redistribute, sublicense, rebrand, or sell the
+Software (or modified versions of the Software) as a commercial product or
+hosted service without written permission from Zachary Walensa.
+
+4. Public Plugin SDK (Apache 2.0)
+The Plugin SDK modules (`umbrix-plugin-api` and `umbrix-plugin-ui-api`) are
+licensed under the Apache License, Version 2.0
+(http://www.apache.org/licenses/LICENSE-2.0). You may use, modify, and
+distribute them—and build or distribute plugins using them—under any license
+of your choice.
+
+5. Separate Add-On Plugins
+First-party add-on plugins published separately (such as the upcoming JVM
+Diagnostic & Profiling Toolkit plugin) are not included in this repository
+and will be governed by their own release terms when published.
+
+6. Disclaimer of Warranty
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
