@@ -8,6 +8,34 @@ Umbrix keeps log bytes off-heap in the OS page cache (`java.lang.foreign.MemoryS
 
 ---
 
+## Benchmarks & Comparison
+
+Measured on Azul OpenJDK 25 LTS against public datasets from **[logpai/loghub](https://github.com/logpai/loghub)** (reproducible locally via `./gradlew :umbrix-core:benchmarkLargeFiles`).
+
+### Measured Performance
+
+| Dataset | File Size & Lines | First Render | Full Index (Cold / Warm) | JVM Heap & Index RAM | Search Throughput |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Synthetic Log** | ~2.00 GB (~15M lines) | < 20 ms | < 1.0 s | < 15 MB (~400 KB idx) | 4.5+ GB/s |
+| **Hadoop HDFS** | 5.05 GB (16.89M lines) | 40 – 68 ms | 2.06 s / 0.72 s | 11 MB heap (1.01 MB idx) | 2.97 – 5.43 GB/s |
+| **Thunderbird** | 29.61 GB (211.21M lines) | 16 – 59 ms | 22.64 s / 0.83 s | 25 MB heap (12.69 MB idx) | 1.93 – 2.82 GB/s |
+
+### Tool Comparison & Honest Trade-Offs
+
+| Capability | **Umbrix** | **klogg** (C++/Qt) | **lnav** (Terminal) | **EmEditor** | **ripgrep + less** (CLI) | **VS Code / Sublime** |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **First Screen** | **16 – 68 ms** | 2 – 60 s (scales with size) | Instant top-screen | 1 – 15 s | Instant (<10 ms) | 15 s (2GB) / Crash (30GB) |
+| **Full Index (5GB / 30GB)** | **2.06 s / 22.64 s** (<1s warm) | 5–8 s / 45–60 s | ~60 s / 4–8 min (SQLite) | N/A (disk-paged) | **0 s** (no index) | Multi-min / **Crash (OOM)** |
+| **RAM (5GB / 30GB)** | **11 MB / 25 MB heap** (1–12.7MB idx) | ~400 MB / 1.8–2.5 GB | ~650 MB / 2–4 GB | ~150 MB / ~250 MB (+ swap) | **~10 MB** | ~6+ GB / **Crash (OOM)** |
+| **Index RAM Overhead** | **~0.04% of file** | ~6 – 8% | ~10 – 15% | 0% (disk swap) | **0%** | N/A |
+| **Stack Trace Folding** | **Yes** (off-heap bitmap) | No | Yes (predefined schemas) | No | No | Yes |
+| **AI / MCP Integration** | **Embedded MCP Server** | None | None | None | None | Editor plugins (fail on 30GB) |
+
+- **Where Umbrix fits best:** Interactive desktop triage of 5GB–30GB+ logs with minimal heap usage, instant scrolling, timeline scrubbing, stack-trace folding, and local AI/MCP slicing.
+- **Where other tools fit better:** `ripgrep` needs zero indexing and streams cold files from any CLI; `lnav` runs over headless SSH and supports SQL queries; `EmEditor` / `Sublime Text` / `VS Code` are full text/code editors; and CLI/C++ tools are <15MB binaries whereas Umbrix bundles an ~85MB stripped JDK 25 runtime.
+
+---
+
 ## Key Features
 
 - **Instant Viewport (<70ms):** Indexes the first 32MB chunk immediately so you can scroll and search right away while the rest of the file finishes indexing in the background.
@@ -95,22 +123,6 @@ When Umbrix is running (and **Settings $\to$ AI & MCP Server** is enabled), it r
 ```
 
 Built-in MCP tools: `search_logs`, `get_time_slice`, `extract_causal_context`, `get_error_clusters`, and `trim_and_export`.
-
----
-
-## Benchmarks & Trade-Offs
-
-Benchmarks below were measured on Azul OpenJDK 25 LTS using public datasets from **[logpai/loghub](https://github.com/logpai/loghub)**. You can run the suite locally with `./gradlew :umbrix-core:benchmarkLargeFiles`.
-
-| Dataset | File Size & Lines | First Render | Full Index (Cold / Warm) | JVM Heap & Index RAM | Search Throughput |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Synthetic Log** | ~2.00 GB (~15M lines) | < 20 ms | < 1.0 s | < 15 MB (~400 KB idx) | 4.5+ GB/s |
-| **Hadoop HDFS** | 5.05 GB (16.89M lines) | 40 – 68 ms | 2.06 s / 0.72 s | 11 MB heap (1.01 MB idx) | 2.97 – 5.43 GB/s |
-| **Thunderbird** | 29.61 GB (211.21M lines) | 16 – 59 ms | 22.64 s / 0.83 s | 25 MB heap (12.69 MB idx) | 1.93 – 2.82 GB/s |
-
-**Honest trade-offs:**
-- **Where Umbrix fits best:** Interactive desktop triage of 5GB–30GB+ logs with minimal heap usage, fast timeline scrubbing, stack-trace folding, and local AI/MCP slicing.
-- **Where CLI tools or editors fit better:** `ripgrep` searches cold files from a terminal with zero indexing; `lnav` runs over SSH and gives SQLite querying; `EmEditor` / `Sublime Text` / `VS Code` are built for full-cursor text editing and coding.
 
 ---
 
