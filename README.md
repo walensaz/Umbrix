@@ -74,13 +74,18 @@ Release binaries are **not code-signed yet** (Authenticode / Apple Developer ID 
 4. *(Optional)* Run `register-open-with.bat` to add **"Open with Umbrix"** to the Explorer right-click menu (writes to `HKCU`, no admin rights needed).
 
 #### macOS (Gatekeeper)
-1. Open `Umbrix-1.0.1.dmg` and drag `Umbrix.app` to `/Applications`.
-2. On first launch, macOS will block an unsigned app. Use either option:
-   - **Terminal:** Clear the quarantine attribute:
+1. Open `Umbrix-1.0.1.dmg` and drag `Umbrix.app` to `/Applications` (or extract `Umbrix-1.0.1-macos-portable.zip`).
+2. On first launch, macOS blocks unsigned `.app` bundles opened from Finder. Use any of these options:
+   - **Run directly from Terminal** (skips Finder's Gatekeeper check, and lets you pass a file directly):
+     ```bash
+     /Applications/Umbrix.app/Contents/MacOS/Umbrix /path/to/logfile.log
+     ```
+     *(If using the portable ZIP, run `./Umbrix.app/Contents/MacOS/Umbrix` from the extracted folder.)*
+   - **Clear quarantine attribute** (so Finder / Spotlight / Dock launch works normally):
      ```bash
      xattr -cr /Applications/Umbrix.app
      ```
-   - **System Settings (macOS Sequoia / Sonoma):** Try opening `Umbrix.app`, click **Done** on the warning, then open **System Settings $\to$ Privacy & Security**, scroll down to the Security section, and click **Open Anyway**. *(On older macOS versions, Control-click `Umbrix.app` $\to$ **Open** also works.)*
+   - **System Settings (macOS Sequoia / Sonoma):** Try opening `Umbrix.app`, click **Done** on the warning, then open **System Settings $\to$ Privacy & Security**, scroll down to Security, and click **Open Anyway**. *(On older macOS versions, Control-click `Umbrix.app` $\to$ **Open** also works.)*
 
 *(If you prefer not to run unsigned binaries, you can inspect the code and run directly via `./gradlew :umbrix-app:run`.)*
 

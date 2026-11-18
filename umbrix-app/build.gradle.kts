@@ -127,14 +127,14 @@ val createAppImage by tasks.registering {
     inputs.file(shadowJarTask.flatMap { it.archiveFile })
     inputs.dir(layout.buildDirectory.dir("min-runtime"))
 
+    val isWindows = org.gradle.internal.os.OperatingSystem.current().isWindows
+    val isMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
     val distDir = layout.buildDirectory.dir("dist").get().asFile
-    val outputAppImage = File(distDir, "Umbrix")
+    val outputAppImage = File(distDir, if (isMac) "Umbrix.app" else "Umbrix")
     outputs.dir(outputAppImage)
 
     doLast {
         val jdkHome = jdk25Launcher.get().metadata.installationPath.asFile
-        val isWindows = org.gradle.internal.os.OperatingSystem.current().isWindows
-        val isMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
         val jpackageBin = File(jdkHome, if (isWindows) "bin/jpackage.exe" else "bin/jpackage")
         val minRuntimeDir = layout.buildDirectory.dir("min-runtime").get().asFile
         val shadowJarTask = tasks.named<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar>("shadowJar").get()
@@ -213,8 +213,15 @@ val packagePortableZip by tasks.registering(Zip::class) {
     archiveClassifier.set("$osName-portable")
     destinationDirectory.set(distDir)
 
-    from(File(distDir, "Umbrix")) {
-        into("Umbrix")
+    val isMac = org.gradle.internal.os.OperatingSystem.current().isMacOsX
+    if (isMac) {
+        from(File(distDir, "Umbrix.app")) {
+            into("Umbrix.app")
+        }
+    } else {
+        from(File(distDir, "Umbrix")) {
+            into("Umbrix")
+        }
     }
 }
 
