@@ -29,19 +29,28 @@ own permitted use. You may not redistribute, sublicense, rebrand, or sell the
 Software (or modified versions of the Software) as a commercial product or
 hosted service without written permission from Zachary Walensa.
 
-4. Public Plugin SDK (Apache 2.0)
+4. No AI Training or Text & Data Mining (TDM Reservation)
+Without express written permission from Zachary Walensa, you may not use the
+Software, its source code, or its documentation (in whole or in part) to train,
+fine-tune, distill, benchmark, or evaluate artificial intelligence or machine
+learning models, or to construct training datasets, embeddings, or scraping
+corpora. All rights related to Text and Data Mining (including any reservation
+of rights under Article 4(3) of EU Directive 2019/790 and equivalent laws) are
+expressly reserved.
+
+5. Public Plugin SDK (Apache 2.0)
 The Plugin SDK modules (`umbrix-plugin-api` and `umbrix-plugin-ui-api`) are
 licensed under the Apache License, Version 2.0
 (http://www.apache.org/licenses/LICENSE-2.0). You may use, modify, and
 distribute them—and build or distribute plugins using them—under any license
 of your choice.
 
-5. Separate Add-On Plugins
+6. Separate Add-On Plugins
 First-party add-on plugins published separately (such as the upcoming JVM
 Diagnostic & Profiling Toolkit plugin) are not included in this repository
 and will be governed by their own release terms when published.
 
-6. Disclaimer of Warranty
+7. Disclaimer of Warranty
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE

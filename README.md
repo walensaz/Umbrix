@@ -184,5 +184,5 @@ Bug reports, feature requests, and pull requests are welcome:
 
 Umbrix is **free to download, build, and use during beta / early public release**—there is no paywall, license check, or checkout set up yet while v1.x stabilizes.
 
-- **Core Application:** Copyright (c) 2026 Zachary Walensa. Source-available under [LICENSE](LICENSE) (redistribution/reselling as a commercial product or hosted service is not permitted; post-GA honor-system commercial tiers are outlined in [COMMERCIAL_AND_LICENSING.md](COMMERCIAL_AND_LICENSING.md)).
+- **Core Application:** Copyright (c) 2026 Zachary Walensa. Source-available under [LICENSE](LICENSE) (redistribution/reselling as a commercial product or hosted service, as well as AI/ML training or TDM dataset harvesting, are not permitted without written permission; post-GA honor-system commercial tiers are outlined in [COMMERCIAL_AND_LICENSING.md](COMMERCIAL_AND_LICENSING.md)).
 - **Plugin SDK (`:umbrix-plugin-api`, `:umbrix-plugin-ui-api`):** Open source under **Apache 2.0**.
