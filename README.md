@@ -142,7 +142,7 @@ Built-in MCP tools: `search_logs`, `get_time_slice`, `extract_causal_context`, `
 | **Bitsets & Regex** | RoaringBitmap, fastutil, RE2J | 64-bit bitsets, primitive collections, linear-time $O(N \cdot M)$ regex |
 
 Further reading:
-- [System Architecture](docs/ARCHITECTURE.md) | [System Design](docs/SYSTEM_DESIGN.md) | [Memory Analysis](docs/MEMORY_AND_PERFORMANCE_ANALYSIS.md)
+- [User Guide](docs/USER_GUIDE.md) | [System Architecture](docs/ARCHITECTURE.md) | [System Design](docs/SYSTEM_DESIGN.md) | [Memory Analysis](docs/MEMORY_AND_PERFORMANCE_ANALYSIS.md)
 - [UI & 64-Bit Viewport](docs/UI_ARCHITECTURE_AND_VIEWPORT.md) | [MCP & AI Governance](docs/MCP_SERVER_AND_AGENT_ECOSYSTEM.md)
 - [Plugin Development Guide](docs/PLUGIN_DEVELOPMENT_GUIDE.md) | [Testing Strategy](docs/TESTING_STRATEGY.md) | [Benchmarks](docs/BENCHMARKS.md)
 

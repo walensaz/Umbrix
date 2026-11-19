@@ -10,6 +10,7 @@ This directory contains the public technical specifications, architectural stand
 
 | Specification | Primary Scope & Subsystem | Core Technical Invariants & Mechanisms |
 | :--- | :--- | :--- |
+| **[`USER_GUIDE.md`](USER_GUIDE.md)** | End-User Usage Guide | Opening logs, tri-mode viewport, search & query AST, forensic triage workflows, settings reference, and diagnostics. |
 | **[`ARCHITECTURE.md`](ARCHITECTURE.md)** | System Architecture & Subsystem Boundaries | Module topology, clean architecture layers, off-heap zero-heap memory model (FFM), and two-tier indexing pipeline. |
 | **[`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md)** | Deep Component Design & Subsystem Contracts | Cross-module API contracts, thread pools, off-heap sparse index coordinate systems, and query execution engine. |
 | **[`MEMORY_AND_PERFORMANCE_ANALYSIS.md`](MEMORY_AND_PERFORMANCE_ANALYSIS.md)** | Memory Footprint & SIMD Optimization | Hardware memory budgets, zero-heap byte-level guarantees, AVX-512/AVX2 vector sweeps, and working set eviction. |
